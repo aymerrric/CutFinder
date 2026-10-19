@@ -8,6 +8,19 @@ from utils import parameters  # noqa: F401  (sets GRB_LICENSE_FILE before Gurobi
 
 Arc = Tuple[int, int]  # (i, j): travel from city i to city j
 
+# Baseline cut: a known valid and useful cut, put in the first generation as its "seed" and shown
+# to the initializer as a format example. Written exactly as the LLM must write a cut: code run
+# after create_model, with m, gp, GRB, n and c defined (see prompts/common.yaml).
+BASELINE_IDEA: str = (
+    "2-cycle elimination: a tour never goes i -> j -> i, so for every pair of cities at most one "
+    "of the two arcs between them is used: x[i, j] + x[j, i] <= 1. Valid for every tour (n >= 3), "
+    "and it removes the fractional LP points that use both directions at 0.5."
+)
+BASELINE_CODE: str = (
+    "x = m._x\n"
+    "m.addConstrs((x[i, j] + x[j, i] <= 1 for (i, j) in x.keys() if i < j), name=\"two_cycle\")"
+)
+
 
 def create_model(n: int, c: Costs) -> gp.Model:
     """

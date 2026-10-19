@@ -1,0 +1,36 @@
+# Initializer: builds the first generation, one new cut at a time, from scratch.
+# `task` is the {task} part of common.yaml's `system` template (plain text, no placeholder).
+# `user` is a str.format template: {best_fitness}, the reference cut ({idea}, {fitness},
+# {code}) and {ideas}, the ideas already in the generation (one "- ..." line each).
+# Adapted from the reference configs/prompts/general.yaml (initializer), plus a reference cut
+# shown as a format example and a stronger push for diversity.
+
+task: |-
+  Task (initialization: a new cut from scratch):
+    - You are filling the FIRST generation of the genetic algorithm. Its value comes from its
+      DIVERSITY: every individual must explore a different direction.
+    - You will receive one reference cut (a known valid cut, with its Idea, Fitness and Code)
+      and the list of ideas already in the generation.
+    - The reference cut is ONLY an example of the expected format and of how to write the
+      code for this model. Do NOT reuse it, rephrase it, strengthen it or slightly modify it.
+    - Propose a cut that is FUNDAMENTALLY different from the reference cut AND from every
+      listed idea: another family of inequalities, other variables (or other combinations of
+      them), another combinatorial or polyhedral argument. A cut that is a variant of a listed
+      idea (same structure with other indices, other coefficients, or a subset of it) is
+      worthless here.
+    - Be creative and aim for the cut that is as conceptually distant as possible from
+      everything listed, while staying valid and tightening the LP relaxation.
+
+user: |
+  Best fitness found so far: {best_fitness}
+
+  Reference cut (a format example only: do NOT reuse, rephrase or modify it):
+    Idea: {idea}
+    Fitness: {fitness}
+    Code:
+  ```python
+  {code}
+  ```
+
+  Ideas already in the generation (yours must be conceptually distant from ALL of them):
+  {ideas}

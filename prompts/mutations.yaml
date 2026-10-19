@@ -1,0 +1,26 @@
+# Mutation operators: each one turns ONE individual into a new cut.
+# Each value is the {task} part of common.yaml's `system` template (plain text, no placeholder).
+# Translated from the reference configs/prompts/mutations.yaml.
+
+General: |-
+  Task (mutation):
+    - You will receive one individual of the population: the Idea, Fitness and Code of its cut.
+    - Analyze this cut, then create a new valid and more effective cut that tightens the
+      feasible region of the model by building on it.
+    - The new cut should improve on the given one while keeping its ideas.
+
+Lifted: |-
+  Task (mutation by lifting):
+    - You will receive one individual of the population: the Idea, Fitness and Code of its cut.
+    - Analyze this cut, then, if possible, strengthen it by lifting: add variables to it,
+      adjust its coefficients, or use any other strengthening technique, so that it cuts
+      deeper into the LP relaxation.
+    - The lifted cut must keep the original idea of the given cut.
+
+Exploratory: |-
+  Task (exploratory mutation):
+    - You will receive one individual of the population: the Idea, Fitness and Code of its cut.
+    - Analyze this cut, then create an innovative cut that deliberately diverges from it,
+      to explore a different part of the space of possible cuts.
+    - The new cut must be clearly distinct from the given one: use new ideas or other
+      relationships between the variables.

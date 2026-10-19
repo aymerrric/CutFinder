@@ -2,6 +2,10 @@
 
 Step-by-step reproduction of EvoCut (reference code: ../repos/EvoCut). The user wants to understand every step: go slowly, one small piece at a time.
 
+## Architecture proposals
+
+- When the user proposes an architecture or design idea that you think would not scale well or could be improved, say so before implementing it: explain the problem and propose your alternative, then let the user choose.
+
 ## Code conventions
 
 - Use type hints everywhere: every function/method parameter and return type (`-> None` included), class attributes, and non-obvious local variables.

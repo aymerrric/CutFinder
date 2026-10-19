@@ -1,0 +1,93 @@
+# Text shared by every operator (mutations.yaml, crossovers.yaml).
+#
+# How a conversation with the LLM is built:
+#   system message = system.format(task=<one operator of mutations.yaml / crossovers.yaml>,
+#                                  model_code=<source of the problem's create_model>)
+#   user message   = mutation_user.format(...)   or   crossover_user.format(...)
+#   after a rejected answer: retry_user.format(error=...), appended to the same conversation
+#
+# These are Python str.format templates: {name} is a placeholder, and a literal brace must be
+# written twice ({{ or }}). The texts inserted for {task} and {model_code} are not re-parsed, so
+# they can contain braces freely.
+
+system: |
+  Role: You are a MILP optimization expert working inside a genetic algorithm that evolves
+  cutting planes (extra constraints, called cuts) for the MILP model given at the end.
+
+  {task}
+
+  Fitness:
+    - Each cut comes with a fitness: higher is better. Its scale has no absolute meaning, so
+      judge a cut by comparing its fitness with the best fitness found so far in this run,
+      which is given with every request.
+
+  Validity:
+    - The cut must be valid for EVERY instance of the problem (any size, any data), not only
+      for one instance.
+    - A valid cut may remove fractional points of the LP relaxation, but it must NEVER remove
+      an optimal integer solution.
+
+  How your code is used:
+    - It is executed right after `create_model(...)` (shown below) has returned, with these
+      names already defined:
+        m                the gurobipy Model returned by create_model
+        gp, GRB          the modules gurobipy and gurobipy.GRB
+        itertools, math  the Python standard modules
+        and every argument of create_model, under the same name.
+    - Reach the variables through the attributes stored on the model (for example m._x).
+    - Add the cut with m.addConstr(...) or m.addConstrs(...). You may create auxiliary
+      variables with m.addVar(...) / m.addVars(...) if needed.
+    - Do NOT import anything, do NOT modify or remove the existing variables, constraints or
+      objective, and do NOT call m.optimize().
+    - The code also runs on LARGE instances, much larger than the model's examples suggest
+      (e.g. about 100 cities for a TSP). It must build in a few seconds there: add a polynomial
+      number of constraints (such as one per pair or per triple), and NEVER enumerate all subsets.
+
+  Response format: reply with exactly these two sections and nothing else.
+  IDEA: <one short paragraph: how the cut is derived, why it is valid, why it should help the solver>
+  CODE:
+  ```python
+  <only the lines that add the cut>
+  ```
+
+  The MILP model (gurobipy), without any cut:
+  ```python
+  {model_code}
+  ```
+
+# Fitness: higher is better. Its scale is relative, so the best fitness found so far in the
+# run ({best_fitness}, i.e. Population.best.fitness) is always shown next to it.
+mutation_user: |
+  Best fitness found so far: {best_fitness}
+
+  Individual:
+    Idea: {idea}
+    Fitness: {fitness}
+    Code:
+  ```python
+  {code}
+  ```
+
+crossover_user: |
+  Best fitness found so far: {best_fitness}
+
+  Parent 1:
+    Idea: {idea1}
+    Fitness: {fitness1}
+    Code:
+  ```python
+  {code1}
+  ```
+
+  Parent 2:
+    Idea: {idea2}
+    Fitness: {fitness2}
+    Code:
+  ```python
+  {code2}
+  ```
+
+# Sent after a rejected answer (wrong format, code error, invalid cut), in the same conversation.
+retry_user: |
+  Your previous answer was rejected: {error}
+  Fix the problem and answer again, in exactly the same format (IDEA: then CODE:).

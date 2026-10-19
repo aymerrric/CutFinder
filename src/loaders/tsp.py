@@ -7,6 +7,8 @@ from loaders.base import Instance, Loader, Problem
 Coords = Dict[int, Tuple[float, float]]  # city -> (x, y)
 Costs = Dict[Tuple[int, int], float]  # (i, j) -> travel cost from i to j
 
+MAX_INSTANCE_SEED: int = 2**31  # seeds drawn when none is given are in [0, MAX_INSTANCE_SEED)
+
 
 class LoaderTSP(Loader):
     """Loader for the Traveling Salesman Problem."""
@@ -26,7 +28,13 @@ class LoaderTSP(Loader):
         For each one: draw n uniformly in [min_cities, max_cities], then draw the (x, y)
         coordinates of the n cities uniformly in the unit square (cities are numbered 1..n),
         then derive the Euclidean cost matrix.
+
+        Names are "rand_s<seed>_<idx>_<n>": the seed makes them unique across instance sets
+        (results, logs and caches are keyed by name). Without a seed, one is drawn at random,
+        so the name still identifies the instance and it can be regenerated.
         """
+        if seed is None:
+            seed = random.randrange(MAX_INSTANCE_SEED)
         rng: random.Random = random.Random(seed)  # local RNG: does not touch the global one
         instances: List[Instance] = []
         for idx in range(n_instances):
@@ -36,7 +44,7 @@ class LoaderTSP(Loader):
             }
             instances.append(
                 {
-                    "name": f"rand_{idx}_{n}",
+                    "name": f"rand_s{seed}_{idx}_{n}",
                     "coords": coords,
                     "args": {"n": n, "c": self._cost_matrix(coords)},  # create_model(n, c)
                 }

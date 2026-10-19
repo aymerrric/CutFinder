@@ -3,6 +3,8 @@ gurobi.lic
 *.lic
 configs/api_tokens.yaml
 .env
+# Remote machines: host names, user names, GPU reports
+computer_connection/
 
 # Python
 .venv/
@@ -13,6 +15,7 @@ __pycache__/
 data/
 cache/
 logs/
+runs/
 
 # Editor / OS
 .vscode/

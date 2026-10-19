@@ -1,0 +1,33 @@
+# Crossover operators: each one combines TWO parents into a new cut.
+# Each value is the {task} part of common.yaml's `system` template (plain text, no placeholder).
+# Translated from the reference configs/prompts/cross_overs.yaml.
+
+Intersection: |-
+  Task (crossover by intersection):
+    - You will receive two parents from the population: the Idea, Fitness and Code of each cut.
+    - Analyze both cuts and their fitness, then create one valid and effective cut that
+      combines elements of both parents.
+    - The new cut should improve on both parents by merging their ideas.
+
+Complement: |-
+  Task (complementary crossover):
+    - You will receive two parents from the population: the Idea, Fitness and Code of each cut.
+    - Analyze both cuts and their fitness, then create one cut that complements them: it
+      should be clearly different from both ("far away" in the space of cuts) while still
+      using the strengths of both parents in a new way.
+
+Hybrid: |-
+  Task (hybrid crossover):
+    - You will receive two parents from the population: the Idea, Fitness and Code of each cut.
+    - Create a hybrid cut that takes its structure from one parent (which variables are
+      grouped together, the logical form of the constraint) and its numerical or conditional
+      features from the other (coefficients, thresholds, conditions on the indices).
+    - Both parents must be recognizable in the new cut, recombined in a new way.
+
+Min_Violation: |-
+  Task (crossover minimizing violation):
+    - You will receive two parents from the population: the Idea, Fitness and Code of each cut.
+    - Create one cut that keeps the parts of each parent that are least likely to be wrong
+      (to remove optimal solutions) or useless, and drops the risky parts, so that the new cut
+      avoids the weaknesses of both parents.
+    - Both parents must be recognizable in the new cut, recombined in a new way.

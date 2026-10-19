@@ -25,6 +25,21 @@ def test_generate_is_reproducible_with_seed() -> None:
     assert a == b
 
 
+def test_names_are_unique_across_seeds() -> None:
+    a: List[Instance] = LoaderTSP().generate(3, seed=0, min_cities=5, max_cities=5)
+    b: List[Instance] = LoaderTSP().generate(3, seed=1, min_cities=5, max_cities=5)
+    names: List[str] = [inst["name"] for inst in a + b]
+    assert len(set(names)) == 6
+    assert a[0]["name"] == "rand_s0_0_5"
+
+
+def test_name_without_seed_regenerates_the_instance() -> None:
+    inst: Instance = LoaderTSP().generate(1, min_cities=5, max_cities=8)[0]
+    seed: int = int(inst["name"].split("_")[1][1:])  # "rand_s<seed>_0_<n>"
+    again: Instance = LoaderTSP().generate(1, seed=seed, min_cities=5, max_cities=8)[0]
+    assert again == inst
+
+
 def test_costs_are_symmetric_euclidean() -> None:
     inst: Instance = LoaderTSP().generate(1, seed=2, min_cities=6, max_cities=6)[0]
     c, coords = inst["args"]["c"], inst["coords"]

@@ -5,7 +5,8 @@ import pytest
 from conftest import brute_force_tsp
 
 from loaders.base import Instance
-from models.tsp import create_model
+from models.transforms import with_cut
+from models.tsp import BASELINE_CODE, BASELINE_IDEA, create_model
 
 
 def solve_quietly(model: gp.Model) -> None:
@@ -37,3 +38,11 @@ def test_solution_is_a_single_tour(tsp_instances: List[Instance]) -> None:
         while succ[tour[-1]] != 1:
             tour.append(succ[tour[-1]])
         assert sorted(tour) == list(range(1, n + 1))  # visits every city once, no subtour
+
+
+def test_baseline_cut_keeps_the_optimum(tsp_instances: List[Instance]) -> None:
+    for inst in tsp_instances:
+        m: gp.Model = with_cut(create_model, BASELINE_CODE, **inst["args"])
+        solve_quietly(m)
+        assert m.ObjVal == pytest.approx(brute_force_tsp(**inst["args"]))
+    assert BASELINE_IDEA
