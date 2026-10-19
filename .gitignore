@@ -1,0 +1,19 @@
+# Secrets: never commit these
+gurobi.lic
+*.lic
+configs/api_tokens.yaml
+.env
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Generated files (folders must exist: mkdir -p data/tsp cache logs)
+data/
+cache/
+logs/
+
+# Editor / OS
+.vscode/
+.DS_Store
