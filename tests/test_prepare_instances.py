@@ -20,10 +20,12 @@ def test_defaults_come_from_parameters() -> None:
     assert args.evaluation_min_cities == parameters.EVALUATION_MIN_CITIES
     assert args.evaluation_max_cities == parameters.EVALUATION_MAX_CITIES
     assert args.min_base_gap == parameters.MIN_BASE_GAP
+    assert args.data_dir == parameters.DATA_DIR
 
 
 def test_flags_override() -> None:
     assert parse_args(["--validation_cities", "20"]).validation_cities == 20
+    assert parse_args(["--data_dir", "../data/rtx3090"]).data_dir == "../data/rtx3090"
 
 
 def test_has_gap_accepts_only_unsolved_instances() -> None:

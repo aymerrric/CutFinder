@@ -1,16 +1,22 @@
 import logging
 import random
+import time
 from typing import Callable, List, Optional
 
 from evolution.individual import COPY, ELITE, INIT, SEED, Individual
 from evolution.population import Population
 from evolution.prompts import Prompts, ReplyFormatError, parse_reply
+from evolution.recorder import ACCEPTED, FORMAT_ERROR, LLM_ERROR, REJECTED, Attempt
 from llm.base import LLMClient, LLMError, Message
 from utils import parameters
 
 # Fitness of a cut, from its code. Raises CutRejected when the cut cannot be used.
 # (Implemented by the cut-evaluation step: run the code, check validity, solve with Solver.)
 Evaluator = Callable[[str], float]
+# Called before each child with (generation being built, child number from 1): progress reports.
+Progress = Callable[[int, int], None]
+# Called with every LLM attempt, accepted or not (see evolution/recorder.py).
+Recorder = Callable[[Attempt], None]
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -39,6 +45,8 @@ class GeneticAlgorithm:
         max_llm_attempts: int = parameters.MAX_LLM_ATTEMPTS,
         tournament_size: int = parameters.TOURNAMENT_SIZE,
         seed: Optional[int] = None,
+        progress: Optional[Progress] = None,
+        record: Optional[Recorder] = None,
     ) -> None:
         for name, value in [("elitism_ratio", elitism_ratio), ("crossover_rate", crossover_rate)]:
             if not 0 <= value <= 1:
@@ -52,6 +60,10 @@ class GeneticAlgorithm:
         self.max_llm_attempts: int = max_llm_attempts
         self.tournament_size: int = tournament_size
         self.rng: random.Random = random.Random(seed)  # local RNG: reproducible with `seed`
+        self.progress: Optional[Progress] = progress
+        self.record: Optional[Recorder] = record
+        self.building: int = 0  # generation and child being built (for the records)
+        self.child: int = 0
 
     def initialize(self, baseline: Individual) -> None:
         """
@@ -72,7 +84,7 @@ class GeneticAlgorithm:
         )
         generation: List[Individual] = [seed]
         while len(generation) < self.population.size:
-            logger.info(f"generation 0: child {len(generation) + 1}/{self.population.size}")
+            self._report(0, len(generation) + 1)
             ideas: List[str] = [ind.idea for ind in generation if not ind.is_copy]
             best: float = max(ind.fitness for ind in generation)
             messages: List[Message] = self.prompts.initializer_messages(seed, ideas, best)
@@ -89,12 +101,15 @@ class GeneticAlgorithm:
             raise RuntimeError("the population is empty: set the first generation first")
         new_generation: List[Individual] = self.elitism()
         while len(new_generation) < self.population.size:
-            logger.info(
-                f"generation {self.population.generation + 1}: "
-                f"child {len(new_generation) + 1}/{self.population.size}"
-            )
+            self._report(self.population.generation + 1, len(new_generation) + 1)
             new_generation.append(self.make_child())
         self.population.set_generation(new_generation)
+
+    def _report(self, generation: int, child: int) -> None:
+        logger.info(f"generation {generation}: child {child}/{self.population.size}")
+        self.building, self.child = generation, child
+        if self.progress is not None:
+            self.progress(generation, child)
 
     def elitism(self) -> List[Individual]:
         """Copies (new individuals, same fitness) of the best individuals of the generation."""
@@ -154,27 +169,59 @@ class GeneticAlgorithm:
         format, or CutRejected from `evaluate`), the reason is sent back and the LLM tries again.
         """
         for attempt in range(1, self.max_llm_attempts + 1):
+            record: Attempt = {
+                "generation": self.building, "child": self.child, "attempt": attempt,
+                "operator": operator, "parents": [p.id for p in parents],
+                "messages": [dict(message) for message in messages],  # the conversation sent
+                "reply": None, "idea": None, "code": None, "outcome": None, "reason": None,
+                "fitness": None, "individual": None, "llm_seconds": None, "eval_seconds": None,
+                "time": time.time(),
+            }
+            start: float = time.time()
             try:
                 reply: str = self.llm.send(messages)
             except LLMError as e:  # the LLM cannot be reached: asking again would not help
                 logger.error(f"{operator}: {e}")
+                self._record(record, outcome=LLM_ERROR, reason=str(e), llm_seconds=time.time() - start)
                 return None
+            record.update(reply=reply, llm_seconds=time.time() - start)
             messages.append({"role": "assistant", "content": reply})
             try:
                 idea, code = parse_reply(reply)
-                fitness: float = self.evaluate(code)
-            except (ReplyFormatError, CutRejected) as e:
-                logger.info(f"{operator}: attempt {attempt}/{self.max_llm_attempts} rejected: {e}")
-                messages.append(self.prompts.retry_message(str(e)))
+            except ReplyFormatError as e:
+                self._reject(record, attempt, operator, messages, FORMAT_ERROR, e)
                 continue
-            return Individual(
+            record.update(idea=idea, code=code)
+            start = time.time()
+            try:
+                fitness: float = self.evaluate(code)
+            except CutRejected as e:
+                record["eval_seconds"] = time.time() - start
+                self._reject(record, attempt, operator, messages, REJECTED, e)
+                continue
+            child: Individual = Individual(
                 idea=idea,
                 code=code,
                 fitness=fitness,
                 generator=operator,
                 parents=[p.id for p in parents],
             )
+            self._record(record, outcome=ACCEPTED, fitness=fitness, individual=child.id,
+                         eval_seconds=time.time() - start)
+            return child
         return None
+
+    def _reject(self, record: Attempt, attempt: int, operator: str, messages: List[Message],
+                outcome: str, error: Exception) -> None:
+        """Log and record a refused answer, and send the reason back to the LLM."""
+        logger.info(f"{operator}: attempt {attempt}/{self.max_llm_attempts} rejected: {error}")
+        self._record(record, outcome=outcome, reason=str(error))
+        messages.append(self.prompts.retry_message(str(error)))
+
+    def _record(self, record: Attempt, **fields: object) -> None:
+        if self.record is not None:
+            record.update(fields)
+            self.record(record)
 
     def _best_fitness(self) -> float:
         assert self.population.best is not None  # set with the first generation

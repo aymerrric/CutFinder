@@ -20,6 +20,8 @@ def test_defaults_come_from_parameters() -> None:
     assert args.seed == parameters.GA_SEED and args.temperature == parameters.TEMPERATURE
     assert args.ollama_host == parameters.OLLAMA_HOST
     assert args.work_limit == parameters.WORK_LIMIT and args.threads == parameters.THREADS
+    assert args.cut_time_limit == parameters.CUT_TIME_LIMIT == 20
+    assert args.cut_build_timeout == parameters.CUT_BUILD_TIMEOUT == 10
     assert args.data_dir == parameters.DATA_DIR and args.runs_dir == parameters.RUNS_DIR
 
 

@@ -1,5 +1,6 @@
 import argparse
 import functools
+import json
 import os
 from pathlib import Path
 from typing import List
@@ -12,12 +13,15 @@ from llm.fake import FakeLLM
 from loaders.base import Instance
 from loaders.sets import BASE, BASE_LP, build_set
 from loaders.tsp import LoaderTSP
-from main import check_same_machine, run
+from llm.base import LLMClient, Message
+from main import check_same_machine, make_run_name, run
+from review_run import review_run
 from models.transforms import relaxed
 from models.tsp import create_model
 from solvers.solver import Solver
 from utils import parameters
 from utils.parser import arg_parser
+from utils.status import FINISHED, STOPPED, Status, read_status
 
 TWO_CYCLE_REPLY: str = (
     "IDEA: no 2-cycles\nCODE:\n```python\nx = m._x\n"
@@ -46,8 +50,9 @@ def data_dir(tmp_path_factory: pytest.TempPathFactory) -> str:
 
 def make_args(data_dir: str, runs_dir: Path, *extra: str) -> argparse.Namespace:
     args: argparse.Namespace = arg_parser([
-        "--data_dir", data_dir, "--runs_dir", str(runs_dir), "--work_limit", str(WORK_LIMIT),
-        "--threads", "1", "--population_size", "2", "--num_generations", "1", "--seed", "0", *extra,
+        "--data_dir", data_dir, "--runs_dir", str(runs_dir), "--log_dir", str(runs_dir), "--work_limit", str(WORK_LIMIT),
+        "--threads", "1", "--population_size", "2", "--num_generations", "1", "--seed", "0",
+        "--review_seeds", "0", *extra,
     ])
     args.run_name = "test_run"
     return args
@@ -91,3 +96,55 @@ def test_sets_from_another_machine_type_are_refused(data_dir: str) -> None:
     evaluation[0][BASE].cpu = "another CPU"
     with pytest.raises(RuntimeError, match="another CPU"):
         check_same_machine(evaluation, threads=1)
+
+
+class InterruptedLLM(LLMClient):
+    """Behaves like a Ctrl-C (or a SIGTERM, which main turns into one) during the first request."""
+
+    def _send(self, messages: List[Message]) -> str:
+        raise KeyboardInterrupt
+
+
+def test_status_file_follows_the_run(data_dir: str, tmp_path: Path) -> None:
+    run(make_args(data_dir, tmp_path), llm=FakeLLM([TWO_CYCLE_REPLY] * 5))
+    status: Status = read_status(os.path.join(tmp_path, "test_run.status.json"))
+    assert status["state"] == FINISHED and status["generation"] == 1 and status["child"] is None
+    assert status["best"] > 0 and status["size"] == 2 and status["pid"] == os.getpid()
+    assert status["population_file"] == os.path.join(tmp_path, "test_run.json")
+    assert os.listdir(os.path.join(tmp_path, "test_run"))  # the run's own Gurobi logs
+    proposals: str = os.path.join(tmp_path, "test_run", "gen_000")  # every LLM proposal
+    assert os.listdir(proposals) == ["child_02_attempt_1.json"]
+
+
+def test_interrupted_run_is_marked_stopped(data_dir: str, tmp_path: Path) -> None:
+    with pytest.raises(KeyboardInterrupt):
+        run(make_args(data_dir, tmp_path), llm=InterruptedLLM())
+    status: Status = read_status(os.path.join(tmp_path, "test_run.status.json"))
+    assert status["state"] == STOPPED and status["building"] == 0 and status["child"] == 2
+
+
+def test_run_name_has_the_host_or_the_resumed_file() -> None:
+    assert make_run_name(arg_parser(["--model_name", "qwen3-coder:30b"]), "saumon").startswith(
+        "tsp_qwen3-coder-30b_saumon_"
+    )
+    resumed: argparse.Namespace = arg_parser(["--population_file", "../runs/tsp_x_saumon_1.json"])
+    assert make_run_name(resumed, "thon") == "tsp_x_saumon_1"
+
+
+def test_end_of_run_review_and_review_of_a_saved_run(data_dir: str, tmp_path: Path) -> None:
+    run(make_args(data_dir, tmp_path, "--review_seeds", "2"),
+        llm=FakeLLM([TWO_CYCLE_REPLY.replace("i < j)", "i < j)\nm.addConstr(m._u[2] >= 2)")] * 5))
+    path: str = os.path.join(tmp_path, "test_run.review.json")
+    review = json.load(open(path))
+    pop: Population = Population.load(os.path.join(tmp_path, "test_run.json"))
+    seed_code: str = pop.history[0][0].code
+    names: List[str] = ["base", "seed"] + (["best"] if pop.best.code != seed_code else [])  # same code: once
+    assert review["seeds"] == [0, 1] and [m["name"] for m in review["models"]] == names
+    assert all(len(m["scores"]) == 2 for m in review["models"])
+    status: Status = read_status(os.path.join(tmp_path, "test_run.status.json"))
+    assert status["state"] == FINISHED and status["phase"] is None
+
+    os.remove(path)  # the standalone script does the same review on the saved population
+    args: argparse.Namespace = make_args(data_dir, tmp_path, "--review_seeds", "2", "--population_file",
+                                         os.path.join(tmp_path, "test_run.json"))
+    assert [r.name for r in review_run(args)] == names and os.path.exists(path)

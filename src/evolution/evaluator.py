@@ -11,6 +11,7 @@ from solvers.solver import CRASHED, ERROR, KILLED, TOO_LARGE, Formulation, Solve
 
 FAILED: List[str] = [ERROR, TOO_LARGE, KILLED, CRASHED]  # the solve did not reach the end
 NO_SOLUTION: List[str] = ["INFEASIBLE", "INF_OR_UNBD"]
+TIME_LIMIT: str = "TIME_LIMIT"  # stopped by the time limit before the work limit
 NO_SOLUTION_GAP: float = 1.0  # gap counted when the cut model finds no solution within the limit
 
 logger: logging.Logger = logging.getLogger(__name__)
@@ -136,4 +137,9 @@ class CutEvaluator:
         result: SolveResult = self.solver.solve(inst, name)
         if result.status in FAILED:
             raise CutRejected(f"{result.status} on instance {inst['name']}: {result.error}")
+        if result.status == TIME_LIMIT:  # how far a solve gets in some seconds depends on the machine
+            raise CutRejected(
+                f"too slow: on instance {inst['name']} the solve hit the {self.solver.time_limit:g} s "
+                "time limit before the work limit (the model with the cut is too large or too slow)"
+            )
         return result

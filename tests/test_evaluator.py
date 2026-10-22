@@ -116,3 +116,12 @@ def test_each_cut_has_its_own_formulations(sets: Tuple[List[Instance], List[Inst
     evaluator(TWO_CYCLE)
     evaluator(TWO_CYCLE)
     assert {"cut1_valid", "cut1_useful", "cut1_eval", "cut2_eval"} <= set(evaluator.solver.formulations)
+
+
+def test_cut_hitting_the_time_limit_is_rejected_as_too_slow(
+    sets: Tuple[List[Instance], List[Instance]]
+) -> None:
+    """Scored at the time limit, the fitness would depend on the machine's speed."""
+    solver: Solver = make_solver(work_limit=1e6, time_limit=0.001)
+    with pytest.raises(CutRejected, match="too slow"):
+        CutEvaluator(create_model, sets[0], sets[1], solver)(TWO_CYCLE)

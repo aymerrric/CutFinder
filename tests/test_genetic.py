@@ -178,3 +178,32 @@ def test_initialize_twice_raises() -> None:
     pop: Population = make_population([1.0, 2.0])
     with pytest.raises(RuntimeError):
         make_ga(pop, []).initialize(BASELINE)
+
+
+def test_progress_is_reported_before_each_child() -> None:
+    calls: List[Any] = []
+    pop: Population = Population(3)
+    ga: GeneticAlgorithm = make_ga(
+        pop, [reply(k) for k in range(10, 20)], elitism_ratio=0.34,
+        progress=lambda generation, child: calls.append((generation, child)),
+    )
+    ga.initialize(BASELINE)
+    ga.generation_step()
+    assert calls == [(0, 2), (0, 3), (1, 2), (1, 3)]  # the seed and the elite are not children
+
+
+def test_every_attempt_is_recorded() -> None:
+    records: List[Any] = []
+    pop: Population = make_population([1.0, 2.0])
+    ga: GeneticAlgorithm = make_ga(pop, ["no format", BAD_CUT, reply(10), reply(11)], elitism_ratio=0,
+                                   crossover_rate=0, max_llm_attempts=3, record=records.append)
+    ga.generation_step()
+    assert [(r["child"], r["attempt"], r["outcome"]) for r in records] == [
+        (1, 1, "format_error"), (1, 2, "rejected"), (1, 3, "accepted"), (2, 1, "accepted"),
+    ]
+    first, rejected, accepted = records[0], records[1], records[2]
+    assert first["generation"] == 1 and first["reply"] == "no format" and first["code"] is None
+    assert rejected["code"] == "m.addConstr(bad)" and "optimal solution" in rejected["reason"]
+    assert accepted["fitness"] == 10.0 and accepted["individual"] == pop.current[0].id
+    assert len(accepted["messages"]) > len(first["messages"])  # the retries are in the conversation
+    assert first["llm_seconds"] is not None and accepted["eval_seconds"] is not None

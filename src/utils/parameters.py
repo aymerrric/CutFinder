@@ -62,6 +62,7 @@ CROSSOVER_RATE: float = 0.7  # probability that a child comes from a crossover, 
 MAX_LLM_ATTEMPTS: int = 3  # LLM tries per child before falling back to a copy of a parent
 GA_SEED: Optional[int] = None  # seed of the GA's random choices (None = different every run)
 TEMPERATURE: Optional[float] = None  # LLM sampling temperature (None = the model's default)
+REVIEW_SEEDS: int = 5  # end of a run: best cut vs seed cut vs base under Gurobi seeds 0..4 (0 = off)
 TOURNAMENT_SIZE: int = 2  # individuals compared to pick one parent (reference: 2)
 
 # Solver (values from the reference configs/general_configs.yaml)
@@ -75,4 +76,10 @@ THREADS: int = 8  # paper: eight threads
 # Solver safety (a formulation may contain code written by the LLM)
 ISOLATED: bool = True  # build and solve every model in its own child process
 BUILD_TIMEOUT: float = 60  # seconds allowed on top of TIME_LIMIT before the child is killed
+# Cut solves (validity, usefulness, scoring) during a run: much tighter than the safety values
+# above. A normal scoring solve takes 4-9 s at WORK_LIMIT = 10 on the lab machines and builds in
+# under 1 s, so a cut that needs more is broken or too heavy: it is rejected after at most
+# CUT_TIME_LIMIT + CUT_BUILD_TIMEOUT = 30 s instead of 120 s.
+CUT_TIME_LIMIT: float = 20  # seconds: hitting it rejects the cut ("too slow"), never scores it
+CUT_BUILD_TIMEOUT: float = 10  # seconds to build the model on top of CUT_TIME_LIMIT, then killed
 MAX_CONSTRAINTS: Optional[int] = 1_000_000  # bigger models are refused before solving (None = no cap)

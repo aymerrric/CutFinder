@@ -80,6 +80,24 @@ def arg_parser(argv: Optional[List[str]] = None) -> argparse.Namespace:
         help="Gurobi work limit per scoring solve (must match the evaluation set's)",
     )
     parser.add_argument(
+        "--review_seeds",
+        type=int,
+        default=parameters.REVIEW_SEEDS,
+        help="End of the run: review the best cut under Gurobi seeds 0..N-1 (0 = no review)",
+    )
+    parser.add_argument(
+        "--cut_time_limit",
+        type=float,
+        default=parameters.CUT_TIME_LIMIT,
+        help="Seconds per cut solve; a cut that hits it is rejected as too slow",
+    )
+    parser.add_argument(
+        "--cut_build_timeout",
+        type=float,
+        default=parameters.CUT_BUILD_TIMEOUT,
+        help="Seconds to build a cut's model on top of --cut_time_limit before it is killed",
+    )
+    parser.add_argument(
         "--threads",
         type=int,
         default=parameters.THREADS,
@@ -96,6 +114,12 @@ def arg_parser(argv: Optional[List[str]] = None) -> argparse.Namespace:
         type=str,
         default=parameters.RUNS_DIR,
         help="Folder receiving <run>.json (population) and <run>.log (must exist)",
+    )
+    parser.add_argument(
+        "--log_dir",
+        type=str,
+        default=parameters.LOG_DIR,
+        help="Folder receiving logs/<run>/, the Gurobi log of every solve of the run",
     )
     parser.add_argument(
         "--cache_dir",

@@ -4,11 +4,13 @@ Run from src/:  python prepare_instances.py [--n_validation 2 --n_evaluation 8 .
 Validation: small instances solved to optimality. Evaluation: large instances that the base
 model cannot finish within WORK_LIMIT (base gap > MIN_BASE_GAP), so cuts are scored by the gap.
 Existing files are loaded instead of rebuilt: delete data/tsp/validation.pkl or
-data/tsp/evaluation.pkl to rebuild them.
+data/tsp/evaluation.pkl to rebuild them. --data_dir: another folder (e.g. one per CPU type:
+Gurobi work, so the evaluation set, depends on the CPU).
 """
 import argparse
 import functools
 import logging
+import os
 from typing import Callable, List, Optional
 
 from loaders.base import Instance
@@ -22,6 +24,7 @@ from utils import parameters
 
 def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build and solve the validation / evaluation sets")
+    parser.add_argument("--data_dir", type=str, default=parameters.DATA_DIR)
     parser.add_argument("--n_validation", type=int, default=parameters.N_VALIDATION)
     parser.add_argument("--validation_cities", type=int, default=parameters.VALIDATION_CITIES)
     parser.add_argument("--n_evaluation", type=int, default=parameters.N_EVALUATION)
@@ -67,7 +70,8 @@ def summary(title: str, instances: List[Instance]) -> str:
 if __name__ == "__main__":  # required: the Solver's child processes import this file
     args: argparse.Namespace = parse_args()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
-    loader: LoaderTSP = LoaderTSP()
+    os.makedirs(os.path.join(args.data_dir, "tsp"), exist_ok=True)
+    loader: LoaderTSP = LoaderTSP(data_dir=args.data_dir)
 
     # validation: optimal tour (validity check) and LP-relaxation optimum (usefulness check)
     validation_solver: Solver = Solver(time_limit=args.validation_time_limit, keep_solution=True)
