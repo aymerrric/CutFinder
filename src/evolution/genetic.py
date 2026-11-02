@@ -1,9 +1,9 @@
 import logging
 import random
 import time
-from typing import Callable, List, Optional
+from typing import Callable, Dict, List, Optional
 
-from evolution.individual import COPY, ELITE, INIT, SEED, Individual
+from evolution.individual import COPY, ELITE, INIT, SEED, Individual, normalized_code
 from evolution.population import Population
 from evolution.prompts import Prompts, ReplyFormatError, parse_reply
 from evolution.recorder import ACCEPTED, FORMAT_ERROR, LLM_ERROR, REJECTED, Attempt
@@ -43,6 +43,7 @@ class GeneticAlgorithm:
         elitism_ratio: float = parameters.ELITISM_RATIO,
         crossover_rate: float = parameters.CROSSOVER_RATE,
         max_llm_attempts: int = parameters.MAX_LLM_ATTEMPTS,
+        max_init_attempts: int = parameters.MAX_INIT_ATTEMPTS,
         tournament_size: int = parameters.TOURNAMENT_SIZE,
         seed: Optional[int] = None,
         progress: Optional[Progress] = None,
@@ -58,6 +59,7 @@ class GeneticAlgorithm:
         self.n_elites: int = int(elitism_ratio * population.size)
         self.crossover_rate: float = crossover_rate
         self.max_llm_attempts: int = max_llm_attempts
+        self.max_init_attempts: int = max_init_attempts  # first generation: more tries per slot
         self.tournament_size: int = tournament_size
         self.rng: random.Random = random.Random(seed)  # local RNG: reproducible with `seed`
         self.progress: Optional[Progress] = progress
@@ -70,8 +72,10 @@ class GeneticAlgorithm:
         First generation: the baseline cut, evaluated (generator SEED), then `size - 1` cuts from
         scratch by the initializer prompt (generator INIT). Each request shows the baseline as a
         format example and lists the ideas already in the generation, which the new cut must be
-        far from. A slot where every LLM attempt fails gets a copy of the seed (COPY), so the
-        generation is always full (the reference would loop until the LLM succeeds).
+        far from. Each slot gets up to `max_init_attempts` answers (more than the other children:
+        few initializer answers pass the checks), and an answer repeating a cut already in the
+        generation is refused. A slot where every attempt fails gets a copy of the seed (COPY), so
+        the generation is always full (the reference would loop until the LLM succeeds).
         """
         if self.population.current:
             raise RuntimeError("the population already has a generation")
@@ -88,7 +92,9 @@ class GeneticAlgorithm:
             ideas: List[str] = [ind.idea for ind in generation if not ind.is_copy]
             best: float = max(ind.fitness for ind in generation)
             messages: List[Message] = self.prompts.initializer_messages(seed, ideas, best)
-            child: Optional[Individual] = self._ask_llm(messages, INIT, [])
+            child: Optional[Individual] = self._ask_llm(
+                messages, INIT, [], attempts=self.max_init_attempts, known=generation
+            )
             if child is None:
                 logger.warning("every LLM attempt failed: copying the seed")
                 child = seed.copy(COPY)
@@ -162,13 +168,17 @@ class GeneticAlgorithm:
         return self._ask_llm(messages, operator, [parent1, parent2])
 
     def _ask_llm(
-        self, messages: List[Message], operator: str, parents: List[Individual]
+        self, messages: List[Message], operator: str, parents: List[Individual],
+        attempts: Optional[int] = None, known: Optional[List[Individual]] = None,
     ) -> Optional[Individual]:
         """
-        Up to `max_llm_attempts` answers in one conversation: after a rejected answer (wrong
-        format, or CutRejected from `evaluate`), the reason is sent back and the LLM tries again.
+        Up to `attempts` answers (default `max_llm_attempts`) in one conversation: after a
+        rejected answer (wrong format, a copy of a cut of `known`, or CutRejected from
+        `evaluate`), the reason is sent back and the LLM tries again.
         """
-        for attempt in range(1, self.max_llm_attempts + 1):
+        attempts = attempts or self.max_llm_attempts
+        known_codes: Dict[str, Individual] = {normalized_code(ind.code): ind for ind in known or []}
+        for attempt in range(1, attempts + 1):
             record: Attempt = {
                 "generation": self.building, "child": self.child, "attempt": attempt,
                 "operator": operator, "parents": [p.id for p in parents],
@@ -189,15 +199,23 @@ class GeneticAlgorithm:
             try:
                 idea, code = parse_reply(reply)
             except ReplyFormatError as e:
-                self._reject(record, attempt, operator, messages, FORMAT_ERROR, e)
+                self._reject(record, attempt, operator, messages, FORMAT_ERROR, e, attempts)
                 continue
             record.update(idea=idea, code=code)
+            same: Optional[Individual] = known_codes.get(normalized_code(code))
+            if same is not None:  # checked before evaluating: a copy costs no solve
+                duplicate: CutRejected = CutRejected(
+                    f"duplicate: this is the same cut as one already in the generation ({same.idea[:80]}); "
+                    "propose a different cut"
+                )
+                self._reject(record, attempt, operator, messages, REJECTED, duplicate, attempts)
+                continue
             start = time.time()
             try:
                 fitness: float = self.evaluate(code)
             except CutRejected as e:
                 record["eval_seconds"] = time.time() - start
-                self._reject(record, attempt, operator, messages, REJECTED, e)
+                self._reject(record, attempt, operator, messages, REJECTED, e, attempts)
                 continue
             child: Individual = Individual(
                 idea=idea,
@@ -212,9 +230,9 @@ class GeneticAlgorithm:
         return None
 
     def _reject(self, record: Attempt, attempt: int, operator: str, messages: List[Message],
-                outcome: str, error: Exception) -> None:
+                outcome: str, error: Exception, attempts: int) -> None:
         """Log and record a refused answer, and send the reason back to the LLM."""
-        logger.info(f"{operator}: attempt {attempt}/{self.max_llm_attempts} rejected: {error}")
+        logger.info(f"{operator}: attempt {attempt}/{attempts} rejected: {error}")
         self._record(record, outcome=outcome, reason=str(error))
         messages.append(self.prompts.retry_message(str(error)))
 

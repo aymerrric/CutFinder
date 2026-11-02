@@ -6,14 +6,15 @@ from typing import List, Tuple
 
 import pytest
 
-from evolution.evaluator import CutEvaluator
+from evolution.evaluator import BASE_SEED, CutEvaluator
 from evolution.genetic import CutRejected
 from loaders.base import Instance
 from loaders.sets import BASE, BASE_LP, build_set
 from loaders.tsp import LoaderTSP
 from models.transforms import relaxed
 from models.tsp import create_model
-from solvers.solver import Solver
+from evolution.review import score
+from solvers.solver import SolveResult, Solver
 
 TWO_CYCLE: str = "x = m._x\nm.addConstrs(x[i, j] + x[j, i] <= 1 for (i, j) in x.keys() if i < j)"
 WORK_LIMIT: float = 0.05  # tiny, so that 40-city evaluation instances stop with a gap, fast
@@ -125,3 +126,29 @@ def test_cut_hitting_the_time_limit_is_rejected_as_too_slow(
     solver: Solver = make_solver(work_limit=1e6, time_limit=0.001)
     with pytest.raises(CutRejected, match="too slow"):
         CutEvaluator(create_model, sets[0], sets[1], solver)(TWO_CYCLE)
+
+
+def test_check_runs_only_the_cheap_checks(sets: Tuple[List[Instance], List[Instance]]) -> None:
+    evaluator: CutEvaluator = make_evaluator(sets)
+    assert evaluator.check(TWO_CYCLE) is None  # valid and useful
+    i, j = used_arc(sets[0][0])
+    with pytest.raises(CutRejected, match="invalid"):
+        evaluator.check(f"m.addConstr(m._x[{i}, {j}] == 0)\nm.addConstr(m._x[{j}, {i}] == 0)")
+    with pytest.raises(CutRejected, match="useless"):
+        evaluator.check("m.addConstr(m._u[2] >= 2)")
+
+
+def test_fitness_is_the_mean_over_the_scoring_seeds(sets: Tuple[List[Instance], List[Instance]]) -> None:
+    base_seed: int = sets[1][0][BASE].seed  # the evaluation set was solved under this seed
+    solvers: List[Solver] = [make_solver(work_limit=WORK_LIMIT, seed=s) for s in (base_seed, 7)]
+    evaluator: CutEvaluator = CutEvaluator(create_model, sets[0], sets[1], solvers[0], solvers)
+    # the stored base results are reused for their seed; seed 7 solves the base model once
+    assert evaluator.base_results[base_seed] == [inst[BASE] for inst in sets[1]]
+    assert BASE_SEED not in solvers[0].formulations and len(solvers[1].results[BASE_SEED]) == len(sets[1])
+    fitness: float = evaluator(TWO_CYCLE)
+    per_seed: List[float] = []
+    for solver in solvers:
+        cut: List[SolveResult] = [solver.results["cut1_eval"][inst["name"]][0] for inst in sets[1]]
+        per_seed.append(score(solver.seed, sets[1], evaluator.base_results[solver.seed], cut).fitness)
+    assert fitness == pytest.approx(sum(per_seed) / 2)
+    assert per_seed[0] != pytest.approx(per_seed[1])  # another seed, another search path

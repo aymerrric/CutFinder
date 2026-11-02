@@ -2,12 +2,12 @@
 Run EvoCut: evolve cuts for a problem with a local LLM.
 Run from src/ (on the machine that built the instance sets, with Ollama running):
     python main.py --model_name qwen3-coder:30b --population_size 8 --num_generations 20
-Resume a run:  python main.py --model_name ... --population_file ../runs/<run>.json
+Resume a run:  python main.py --model_name ... --population_file ../runs/<run>/population.json
 
-Writes runs/<run>.json (the population, saved after every generation), runs/<run>.log,
-runs/<run>.status.json (where the run is: generation, child, best; read by fleet.py), every LLM
-proposal in runs/<run>/gen_<k>/child_<c>_attempt_<a>.json, and the Gurobi logs in logs/<run>/. <run> = <problem>_<model>_<host>_<date>; a resumed run keeps the name
-of its population file, so it continues the same files.
+Everything about a run goes in its own folder runs/<run>/ (layout: utils/run_files.py):
+summary.md (read this first), population.json, status.json, run.log, review.json, and every LLM
+proposal in llm/gen_<k>/. The Gurobi logs go in logs/<run>/.
+<run> = <problem>_<model>_<host>_<date>; a resumed run keeps its folder.
 """
 import argparse
 import inspect
@@ -29,6 +29,7 @@ from evolution.population import Population
 from evolution.prompts import Prompts
 from evolution.recorder import AttemptRecorder
 from evolution.review import CutReview, format_review, review_cuts
+from evolution.summary import write_summary
 from llm.base import LLMClient
 from llm.ollama import OllamaClient
 from loaders.base import Instance, Loader
@@ -38,6 +39,7 @@ from models import tsp
 from solvers.solver import Formulation, SolveResult, Solver, machine_info
 from utils import parameters
 from utils.parser import arg_parser
+from utils.run_files import LLM_DIR, LOG, POPULATION, REVIEW, STATUS, run_name_of
 from utils.status import FAILED, FINISHED, STOPPED, RunStatus
 
 logger: logging.Logger = logging.getLogger("main")
@@ -87,15 +89,15 @@ def make_solver(args: argparse.Namespace, seed: int = parameters.SEED) -> Solver
 
 def final_review(
     args: argparse.Namespace, problem: Problem, evaluation: List[Instance], population: Population,
-    population_file: str,
+    run_dir: str,
 ) -> List[CutReview]:
     """
     The best cut, the seed cut and the base model under Gurobi seeds 0..review_seeds-1: is the
-    best cut's fitness more than luck? Logged, and saved next to the population as
-    <run>.review.json.
+    best cut's fitness more than luck? Logged, and saved as <run_dir>/review.json.
     """
     best: Individual = population.best
-    seed_cut: Individual = next(ind for ind in population.history[0] if ind.generator == SEED)
+    first: List[Individual] = population.history[0] if population.history else population.current
+    seed_cut: Individual = next(ind for ind in first if ind.generator == SEED)
     cuts: Dict[str, str] = {"seed": seed_cut.code}
     fitness: Dict[str, float] = {"seed": seed_cut.fitness}
     if best.code != seed_cut.code:
@@ -106,7 +108,7 @@ def final_review(
         problem.base, cuts, evaluation, seeds, lambda s: make_solver(args, seed=s), fitness
     )
     logger.info(format_review(reviews))
-    path: str = os.path.splitext(population_file)[0] + ".review.json"
+    path: str = os.path.join(run_dir, REVIEW)
     with open(path, "w") as f:
         json.dump({"seeds": seeds, "work_limit": args.work_limit, "threads": args.threads,
                    "models": [r.to_dict() for r in reviews]}, f, indent=1)
@@ -151,11 +153,16 @@ def run(args: argparse.Namespace, llm: Optional[LLMClient] = None) -> Population
             raise ValueError(f"{args.model_name} is not on the Ollama server {args.ollama_host}")
         llm = ollama
 
-    solver: Solver = make_solver(args)
-    evaluator: CutEvaluator = CutEvaluator(problem.base, validation, evaluation, solver)
-    prompts: Prompts = Prompts(inspect.getsource(problem.base))
+    overlap: List[int] = sorted(set(args.fitness_seeds) & set(range(args.review_seeds)))
+    if overlap:
+        logger.warning(f"fitness seeds {overlap} are also review seeds: the review is no longer independent")
+    scoring: List[Solver] = [make_solver(args, seed=s) for s in args.fitness_seeds]  # one per seed
+    evaluator: CutEvaluator = CutEvaluator(problem.base, validation, evaluation, scoring[0], scoring)
+    prompts: Prompts = Prompts(inspect.getsource(problem.base), variant=args.prompt_variant)
 
-    path: str = args.population_file or os.path.join(args.runs_dir, f"{args.run_name}.json")
+    run_dir: str = os.path.join(args.runs_dir, args.run_name)  # everything about this run
+    os.makedirs(run_dir, exist_ok=True)
+    path: str = args.population_file or os.path.join(run_dir, POPULATION)
     population: Population
     if args.population_file and os.path.exists(args.population_file):
         population = Population.load(args.population_file)
@@ -168,19 +175,22 @@ def run(args: argparse.Namespace, llm: Optional[LLMClient] = None) -> Population
         elitism_ratio=args.elitism_ratio,
         crossover_rate=args.crossover_rate,
         max_llm_attempts=args.max_llm_attempts,
+        max_init_attempts=args.max_init_attempts,
         seed=args.seed,
     )
     host, cpu = machine_info()
     status: RunStatus = RunStatus(
-        os.path.join(args.runs_dir, f"{args.run_name}.status.json"),
+        os.path.join(run_dir, STATUS),
         run=args.run_name, host=host, cpu=cpu, pid=os.getpid(), model=args.model_name,
+        arguments={k: v for k, v in vars(args).items() if k != "argv"},
+        license_file=os.environ.get("GRB_LICENSE_FILE"),  # the machine's own license or the WLS one
         argv=getattr(args, "argv", []), population_file=os.path.abspath(path),
         size=population.size, num_generations=args.num_generations,
         generation=population.generation if population.current else None, building=None,
         child=None, best=population.best.fitness if population.best else None,
     )
     ga.progress = lambda generation, child: status.update(building=generation, child=child)
-    ga.record = AttemptRecorder(os.path.join(args.runs_dir, args.run_name))  # every LLM proposal
+    ga.record = AttemptRecorder(os.path.join(run_dir, LLM_DIR))  # every LLM proposal
     start: float = time.time()
 
     def generation_done() -> None:
@@ -189,6 +199,7 @@ def run(args: argparse.Namespace, llm: Optional[LLMClient] = None) -> Population
         fitness: List[float] = [ind.fitness for ind in population.current]
         status.update(generation=population.generation, building=None, child=None,
                       best=population.best.fitness, mean=statistics.mean(fitness))
+        write_summary(run_dir, population)
 
     try:
         if not population.current:
@@ -199,14 +210,17 @@ def run(args: argparse.Namespace, llm: Optional[LLMClient] = None) -> Population
             generation_done()
         if args.review_seeds > 0:
             status.update(phase="review")
-            final_review(args, problem, evaluation, population, path)
+            final_review(args, problem, evaluation, population, run_dir)
     except KeyboardInterrupt:  # Ctrl-C, or SIGTERM (see __main__)
         status.update(state=STOPPED)
+        write_summary(run_dir, population)
         raise
     except Exception as e:
         status.update(state=FAILED, error=f"{type(e).__name__}: {e}")
+        write_summary(run_dir, population)
         raise
     status.update(state=FINISHED, phase=None)
+    logger.info(f"summary: {write_summary(run_dir, population)}")
 
     best: Individual = population.best
     logger.info(f"best cut ({best.generator}, fitness {best.fitness:.3f}): {best.idea}\n{best.code}")
@@ -231,9 +245,9 @@ def stop_on_sigterm(signum: int, frame: Any) -> None:
 
 
 def make_run_name(args: argparse.Namespace, host: str) -> str:
-    """A resumed run keeps its population file's name; a new one gets problem, model, host, date."""
+    """A resumed run keeps its name (its folder); a new one gets problem, model, host, date."""
     if args.population_file:
-        return os.path.splitext(os.path.basename(args.population_file))[0]
+        return run_name_of(args.population_file)
     model: str = (args.model_name or "none").replace(":", "-").replace("/", "-")
     return f"{args.problem_name}_{model}_{host}_{time.strftime('%Y%m%d_%H%M%S')}"
 
@@ -245,7 +259,8 @@ if __name__ == "__main__":  # required: the Solver's child processes import this
     host, cpu = machine_info()
     arguments.run_name = make_run_name(arguments, host)
     arguments.argv = sys.argv[1:]
-    setup_logging(os.path.join(arguments.runs_dir, f"{arguments.run_name}.log"))
+    os.makedirs(os.path.join(arguments.runs_dir, arguments.run_name), exist_ok=True)
+    setup_logging(os.path.join(arguments.runs_dir, arguments.run_name, LOG))
     signal.signal(signal.SIGTERM, stop_on_sigterm)
     logger.info(f"run {arguments.run_name} on {host} ({cpu}), arguments: {vars(arguments)}")
     run(arguments)

@@ -1,5 +1,5 @@
 import os
-from typing import Optional
+from typing import List, Optional
 
 # Default values of every setting. The command-line flags of parser.py use them as defaults.
 
@@ -60,8 +60,16 @@ NUM_GENERATIONS: int = 20  # generations after the first one (reference: num_ste
 ELITISM_RATIO: float = 0.2  # share of the best individuals copied unchanged: int(0.2 * 8) = 1
 CROSSOVER_RATE: float = 0.7  # probability that a child comes from a crossover, else a mutation
 MAX_LLM_ATTEMPTS: int = 3  # LLM tries per child before falling back to a copy of a parent
+# First generation: more tries per slot. Prompt benchmark of 2026-10-24: only 3-17% of the
+# initializer's answers are accepted, so 3 tries often end with a copy of the seed.
+MAX_INIT_ATTEMPTS: int = 15
 GA_SEED: Optional[int] = None  # seed of the GA's random choices (None = different every run)
 TEMPERATURE: Optional[float] = None  # LLM sampling temperature (None = the model's default)
+# Gurobi seeds of the fitness during a run: a cut's fitness is the mean over them. One seed is too
+# noisy (learnt_results.md 1.2: the seed cut scores 2.6-14.6 depending on the seed). 42 = the seed
+# of the evaluation set's base results; disjoint from the review seeds 0..REVIEW_SEEDS-1, so that
+# the review stays an independent check of the selected cut. Scoring time grows with their number.
+FITNESS_SEEDS: List[int] = [42, 43, 44]
 REVIEW_SEEDS: int = 5  # end of a run: best cut vs seed cut vs base under Gurobi seeds 0..4 (0 = off)
 TOURNAMENT_SIZE: int = 2  # individuals compared to pick one parent (reference: 2)
 
@@ -76,10 +84,11 @@ THREADS: int = 8  # paper: eight threads
 # Solver safety (a formulation may contain code written by the LLM)
 ISOLATED: bool = True  # build and solve every model in its own child process
 BUILD_TIMEOUT: float = 60  # seconds allowed on top of TIME_LIMIT before the child is killed
-# Cut solves (validity, usefulness, scoring) during a run: much tighter than the safety values
-# above. A normal scoring solve takes 4-9 s at WORK_LIMIT = 10 on the lab machines and builds in
-# under 1 s, so a cut that needs more is broken or too heavy: it is rejected after at most
-# CUT_TIME_LIMIT + CUT_BUILD_TIMEOUT = 30 s instead of 120 s.
-CUT_TIME_LIMIT: float = 20  # seconds: hitting it rejects the cut ("too slow"), never scores it
+# Cut solves (validity, usefulness, scoring) during a run: tighter than the safety values above.
+# A normal scoring solve takes 4-11 s at WORK_LIMIT = 10 on the lab machines and builds in under
+# 1 s. 20 s was too tight: on a loaded machine (dindon, 2026-10-27) the seed cut itself reached
+# only 6.5 work units in 20 s and was rejected. 60 s keeps a 6x margin; a model that never
+# finishes building is still stopped by CUT_BUILD_TIMEOUT.
+CUT_TIME_LIMIT: float = 60  # seconds: hitting it rejects the cut ("too slow"), never scores it
 CUT_BUILD_TIMEOUT: float = 10  # seconds to build the model on top of CUT_TIME_LIMIT, then killed
 MAX_CONSTRAINTS: Optional[int] = 1_000_000  # bigger models are refused before solving (None = no cap)

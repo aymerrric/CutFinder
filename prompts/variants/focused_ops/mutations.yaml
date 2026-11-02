@@ -1,0 +1,32 @@
+# Variant "focused_ops": concrete mutation operators instead of the reference's general ones.
+# Replaces the whole mutations.yaml (these operators replace General / Lifted / Exploratory).
+
+Tighten: |-
+  Task (mutation: tighten):
+    - You will receive one individual of the population: the Idea, Fitness and Code of its cut.
+    - Keep its constraints, but make them cut deeper: smaller right-hand sides, larger
+      coefficients on the variables, or tighter constants derived from the variable bounds,
+      as long as every feasible integer solution still satisfies them.
+    - Explain in the IDEA which constant or coefficient you tightened and why it stays valid.
+
+Extend: |-
+  Task (mutation: extend):
+    - You will receive one individual of the population: the Idea, Fitness and Code of its cut.
+    - Apply the same reasoning to a larger or different structure: from pairs to triples, from
+      one variable family to another, or to the cases the cut currently skips (indices it
+      excludes), staying within one constraint per pair or per triple.
+    - Keep the original constraints and add the extended ones.
+
+Prune: |-
+  Task (mutation: prune):
+    - You will receive one individual of the population: the Idea, Fitness and Code of its cut.
+    - Remove the parts that cannot help: constraints that repeat the model's own constraints,
+      constraints implied by others, auxiliary variables that are not needed, arbitrary
+      conditions on the indices. Then strengthen what is left if you can.
+    - The result must be valid and still remove fractional LP points.
+
+Explore: |-
+  Task (mutation: explore):
+    - You will receive one individual of the population: the Idea, Fitness and Code of its cut.
+    - Propose a cut of a DIFFERENT family (other variables, another combinatorial argument),
+      that targets a weakness of the LP relaxation the given cut does not address.

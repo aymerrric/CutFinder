@@ -17,16 +17,20 @@ What is left to do, in priority order. What is done is described in README.md ("
     vs 9.4%, base 11.7%): a real improvement, but smaller than its run fitness (19.1), because
     selecting the best of many noisy scores overestimates it.
   → Score cuts on several seeds during the run (or more instances), and compare mean gaps.
-- Every LLM proposal is now recorded (`runs/<run>/gen_<k>/`), and broken cuts are rejected
-  after 30 s instead of 120 s.
+- Every LLM proposal is now recorded (`runs/<run>/llm/gen_<k>/`, with a `summary.md` per run), and broken cuts are rejected
+  after at most 70 s instead of 120 s (60 s solve + 10 s build; 20 s was too tight).
 
 ## Priorities
 
 **P1. Before any new long run**
+0. **Measure whether a cut tightens the relaxation** (`learnt_results.md` 1.7): the 6 best cuts
+   of 2026-10-27 all have the same LP relaxation value as the seed cut, yet score 13–15 vs 10.
+   Add the root LP bound gain to the evaluation, review and summary; test winners on held-out,
+   larger instances.
 1. **Is the fitness sound?** Every run now ends with a review of its best cut under 5 seeds
    (README Step 15), and `review_run.py` reviews old runs. Still to do: the known cuts as
    reference points (section below), and deciding from the reviews whether the evaluation must
-   change (several seeds during the run, more instances).
+   change (more instances). Several seeds during the run: done (README Step 19, `--fitness_seeds`).
 2. **License error → wait and retry**, never reject the cut (section "Compute and license").
 3. **Analysis script** over the recorded proposals (section "Data and analysis").
 4. **Relax the validity check**, otherwise symmetry-breaking cuts, often the best ones for the
@@ -44,8 +48,22 @@ What is left to do, in priority order. What is done is described in README.md ("
    `<think>` block must be removed in `OllamaClient.clean`).
 
 **P3. Scale up**
-8. **Prompt experiments, offline**, and richer feedback on rejection (section below).
-9. **More compute**: the license allows 2 runs at a time (section "Compute and license").
+8. **Prompt experiments**: first benchmark done on 2026-10-24 (`runs/prompt_bench/prompts_20261024/
+   report.md`; 1,650 answers of `qwen3-coder:30b`, 7 variants × 30 rounds):
+   - No variant is significantly better than `default` at producing new accepted cuts. `rules`
+     is the best (55% vs 48%, p = 0.09). `catalog` (25%, many too-slow cuts) and `reasoning`
+     (39%, many copies of a parent) are significantly worse.
+   - (2026-10-27: `--max_init_attempts 15` and duplicate refusal for generation 0, README Step 18.)
+   - **The initializer is the weak point**: 1–5 accepted out of 30 for every variant (`concise`
+     best, 17%), which explains the copies in generation 0 of the runs. Next: rework the
+     initializer prompt (and benchmark only `--tasks init`).
+   - **Invalid answers are the main refusal** (17–34%): relaxing the validity check (P1) matters.
+   - `focused_ops` gets the most accepted answers, but 17% of them are copies of a parent:
+     refuse such copies in the GA (Algorithm ideas: deduplicate).
+   - Next: a full run with `rules` vs `default`, reviewed under several seeds. Richer feedback on
+     rejection is still to do (section below).
+9. **More compute**: the license allows 2 runs at a time. The options and the email to send are
+   in `improve_license.md` (campus server, one named-user license per machine, ...).
 10. **A second problem**: CWLP first (section "Other problems").
 
 **P4. Later**
@@ -104,7 +122,8 @@ instances are cheap.
 
 ## Data and analysis (P1)
 Recorded since 2026-10-21: every proposal with its conversation, reply, code, outcome, reason,
-fitness and timings (`runs/<run>/gen_<k>/child_<c>_attempt_<a>.json`). Still to do:
+fitness and timings (`runs/<run>/llm/gen_<k>/child_<c>_attempt_<a>.json`), and `summary.md` already gives the
+acceptance rate per operator and the main rejection reasons. Still to do:
 - `analyze_runs.py`:
   - best / mean fitness per generation;
   - **acceptance rate per operator and per variant**;
@@ -168,6 +187,9 @@ evaluation instances, a mixed score (gap if unsolved, work if solved) may be nee
 - **Islands:** one GA per machine, migrating the best cut every few generations through the
   shared home (`runs/`). Needs more than 2 license sessions.
 - **Deduplicate:** refuse a child whose code (normalized) or idea is already in the population.
+  Seen in the first prompt benchmark: the `Lifted` mutation sometimes returns its parent's code
+  unchanged, and it is accepted (valid and useful, since the parent is). In a run it would be
+  a wasted slot. Refusing children identical to a parent (`prompt_bench.normalize`) is cheap.
 - **Memory of failures:** show the LLM the ideas already rejected in this run.
 - **Combine the final cuts:** the best k cuts together may beat the best one alone.
 - **Adaptive operators:** choose variants in proportion to their recent acceptance rate (a

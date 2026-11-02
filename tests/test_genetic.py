@@ -207,3 +207,33 @@ def test_every_attempt_is_recorded() -> None:
     assert accepted["fitness"] == 10.0 and accepted["individual"] == pop.current[0].id
     assert len(accepted["messages"]) > len(first["messages"])  # the retries are in the conversation
     assert first["llm_seconds"] is not None and accepted["eval_seconds"] is not None
+
+
+def test_first_generation_has_its_own_number_of_attempts() -> None:
+    pop: Population = Population(2)
+    ga: GeneticAlgorithm = make_ga(pop, [BAD_CUT] * 4 + [reply(10)], max_llm_attempts=2, max_init_attempts=5)
+    ga.initialize(BASELINE)
+    assert pop.current[1].generator == INIT and pop.current[1].fitness == 10.0  # accepted at attempt 5
+    assert len(ga.llm.received) == 5  # 5 answers asked, in one conversation that grows
+    assert len(ga.llm.received[-1]) == len(ga.llm.received[0]) + 2 * 4  # 4 refusals sent back
+
+
+def test_an_initial_cut_repeating_the_generation_is_refused_without_solving() -> None:
+    evaluated: List[str] = []
+
+    def counting(code: str) -> float:
+        evaluated.append(code)
+        return evaluate(code)
+
+    records: List[Any] = []
+    pop: Population = Population(3)
+    ga: GeneticAlgorithm = GeneticAlgorithm(
+        pop, FakeLLM([reply(10), reply(10).replace("cut_10)", "cut_10)  # same, commented"), reply(11)]),
+        PROMPTS, counting, seed=0, record=records.append,
+    )
+    ga.initialize(BASELINE)
+    assert [ind.fitness for ind in pop.current] == [6.0, 10.0, 11.0]
+    assert [r["outcome"] for r in records] == ["accepted", "rejected", "accepted"]
+    assert records[1]["reason"].startswith("duplicate") and len(evaluated) == 3  # seed, 10, 11
+    retry: str = ga.llm.received[2][-1]["content"]  # 3rd answer asked: after the duplicate
+    assert "same cut as one already in the generation" in retry

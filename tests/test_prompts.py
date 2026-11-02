@@ -10,7 +10,7 @@ import pytest
 import yaml
 
 from evolution.individual import Individual
-from evolution.prompts import Prompts, ReplyFormatError, parse_reply
+from evolution.prompts import DEFAULT_VARIANT, Prompts, ReplyFormatError, parse_reply, prompt_variants
 from llm.base import Message
 from models.tsp import create_model
 from utils import parameters
@@ -154,3 +154,38 @@ def test_initializer_messages() -> None:
     user: str = messages[1]["content"]
     for text in ["m.addConstr(A)", "0.25", "0.75", "- forbid 2-cycles\n- degree bound", "do NOT reuse"]:
         assert text in user
+
+
+@pytest.mark.parametrize("variant", prompt_variants())
+def test_every_variant_fills_without_placeholder(variant: str) -> None:
+    prompts: Prompts = Prompts(MODEL_CODE, variant=variant)
+    ind: Individual = Individual(idea="an idea", code="m.addConstr(c)", fitness=3.0)
+    conversations: List[List[Message]] = [prompts.initializer_messages(ind, ["- a"], 4.0)]
+    conversations += [prompts.mutation_messages(op, ind, 4.0) for op in prompts.mutations]
+    conversations += [prompts.crossover_messages(op, ind, ind, 4.0) for op in prompts.crossovers]
+    for messages in conversations:
+        system: str = messages[0]["content"]
+        assert MODEL_CODE in system and "{task}" not in system and "{model_code}" not in system
+        assert "IDEA:" in system and "CODE:" in system  # parse_reply's format is still asked
+        assert "Best fitness found so far: 4.0" in messages[1]["content"]
+    assert "the error" in prompts.retry_message("the error")["content"]
+
+
+def test_variants_override_keys_or_whole_files(tmp_path: object) -> None:
+    import shutil
+    folder: str = os.path.join(str(tmp_path), "prompts")
+    shutil.copytree(parameters.PROMPTS_DIR, folder, ignore=shutil.ignore_patterns("variants"))
+    os.makedirs(os.path.join(folder, "variants", "v"))
+    with open(os.path.join(folder, "variants", "v", "common.yaml"), "w") as f:
+        f.write("retry_user: 'NEW {error}'\n")
+    with open(os.path.join(folder, "variants", "v", "mutations.yaml"), "w") as f:
+        f.write("Only: 'Task (only)'\n")
+    default: Prompts = Prompts(MODEL_CODE, prompts_dir=folder)
+    variant: Prompts = Prompts(MODEL_CODE, prompts_dir=folder, variant="v")
+    assert variant.retry_message("e")["content"] == "NEW e"
+    assert variant.common["system"] == default.common["system"]  # other keys kept (merge)
+    assert list(variant.mutations) == ["Only"]  # whole file replaced
+    assert variant.crossovers == default.crossovers  # file absent from the variant: default
+    assert prompt_variants(folder) == [DEFAULT_VARIANT, "v"]
+    with pytest.raises(FileNotFoundError, match="nope"):
+        Prompts(MODEL_CODE, prompts_dir=folder, variant="nope")

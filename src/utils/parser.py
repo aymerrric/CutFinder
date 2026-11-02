@@ -56,6 +56,12 @@ def arg_parser(argv: Optional[List[str]] = None) -> argparse.Namespace:
         help="LLM tries per child before copying a parent instead",
     )
     parser.add_argument(
+        "--max_init_attempts",
+        type=int,
+        default=parameters.MAX_INIT_ATTEMPTS,
+        help="LLM tries per slot of the first generation before copying the seed",
+    )
+    parser.add_argument(
         "--seed",
         type=int,
         default=parameters.GA_SEED,
@@ -78,6 +84,19 @@ def arg_parser(argv: Optional[List[str]] = None) -> argparse.Namespace:
         type=float,
         default=parameters.WORK_LIMIT,
         help="Gurobi work limit per scoring solve (must match the evaluation set's)",
+    )
+    parser.add_argument(
+        "--prompt_variant",
+        type=str,
+        default=None,
+        help="Folder of prompts/variants/ overriding part of the prompts (default: prompts/ only)",
+    )
+    parser.add_argument(
+        "--fitness_seeds",
+        type=int,
+        nargs="+",
+        default=parameters.FITNESS_SEEDS,
+        help="Gurobi seeds of the fitness during the run (mean over them), e.g. --fitness_seeds 42 43 44",
     )
     parser.add_argument(
         "--review_seeds",

@@ -1,3 +1,4 @@
+import re
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 from uuid import uuid4
@@ -56,3 +57,10 @@ class Individual:
     def from_dict(cls, data: Dict[str, Any]) -> "Individual":
         """Inverse of `to_dict`."""
         return cls(**data)
+
+
+def normalized_code(code: str) -> str:
+    """The code without comments and whitespace: two cuts with the same normalized code are the
+    same cut (used to refuse copies)."""
+    lines: List[str] = [re.sub(r"#.*", "", line) for line in code.splitlines()]
+    return "".join("".join(lines).split())

@@ -103,14 +103,19 @@ My_evo_cut/
 │                          # machines one folder per CPU group: data/rtx3090/tsp/, data/a5000/tsp/, ...
 ├── cache/                 # cached solver results
 ├── logs/                  # Gurobi log files, one per solve, in logs/<run>/
-├── runs/                  # per EvoCut run: <run>.json (population), .log, .status.json, and
-│                          # <run>/gen_<k>/: every LLM proposal of generation k, and
-│                          # <run>.review.json: the final review of the best cut (git-ignored)
+├── runs/                  # one folder per EvoCut run (git-ignored):
+│   ├── <run>/             #   summary.md (read first), population.json, status.json, run.log,
+│   │                      #   review.json, llm/gen_<k>/ (every LLM proposal of generation k)
+│   ├── prompt_bench/<name>/ # prompt benchmarks: report.md, results.jsonl, config.json
+│   └── launches/          #   console output of the launches and set preparations (fleet.py)
+├── improve_license.md     # how to get more Gurobi capacity for free (campus server, named-user licenses, ...)
+├── learnt_results.md     # what the runs taught us, each finding with its data (files and numbers)
 ├── prompts/               # LLM prompts (YAML, versioned)
 │   ├── common.yaml        # shared system template + user message templates
 │   ├── mutations.yaml     # General, Lifted, Exploratory
 │   ├── crossovers.yaml    # Intersection, Complement, Hybrid, Min_Violation
-│   └── initializer.yaml   # first generation: new cuts from scratch, baseline as format example
+│   ├── initializer.yaml   # first generation: new cuts from scratch, baseline as format example
+│   └── variants/          # prompt variants to compare (rules, catalog, reasoning, concise, few_shot, focused_ops)
 ├── gurobi.lic             # Gurobi license (secret, git-ignored)
 ├── computer_connection/   # remote machines (git-ignored): machines.txt, fleet.py + dashboard.html, scripts
 ├── .gitignore             # hides secrets, .venv, data/, cache/, logs/, runs/
@@ -121,10 +126,13 @@ My_evo_cut/
     ├── utils/
     │   ├── parameters.py  # default values for every setting + project paths
     │   ├── parser.py      # command-line arguments (defaults come from parameters.py)
-    │   └── status.py      # RunStatus: runs/<run>.status.json, where a run is (read by fleet.py)
+    │   ├── status.py      # RunStatus: runs/<run>/status.json, where a run is (read by fleet.py)
+    │   └── run_files.py   # layout of a run folder (summary.md, population.json, llm/, ...)
     ├── prepare_instances.py  # script: build + solve the validation and evaluation sets
     ├── main.py            # script: run EvoCut (first generation + generation steps), save each generation
     ├── review_run.py      # script: the final review for a saved run (no LLM)
+    ├── summarize_run.py   # script: (re)write the summary.md of run folders
+    ├── prompt_bench.py    # script: compare prompt variants without running the GA
     ├── loaders/
     │   ├── base.py        # Loader: abstract interface to generate / save / load / split instances
     │   ├── tsp.py         # LoaderTSP: random Euclidean TSP instances
@@ -143,7 +151,8 @@ My_evo_cut/
         ├── population.py  # Population: fixed-size current generation, history, best known, save/load
         ├── prompts.py     # Prompts: conversations from prompts/*.yaml; parse_reply: IDEA/CODE
         ├── evaluator.py   # CutEvaluator: validity, usefulness, work-based fitness of a cut
-        ├── recorder.py    # AttemptRecorder: every LLM proposal saved in runs/<run>/gen_<k>/
+        ├── recorder.py    # AttemptRecorder: every LLM proposal saved in runs/<run>/llm/gen_<k>/
+        ├── summary.py     # write_summary: runs/<run>/summary.md, built from the run folder
         ├── review.py      # review_cuts: best cut vs seed cut vs base under several Gurobi seeds
         └── genetic.py     # GeneticAlgorithm: elitism, tournament, mutation, crossover, generation_step
 ```
@@ -758,7 +767,7 @@ instance sets, with Ollama running there:
 ```bash
 cd src
 python main.py --model_name qwen3-coder:30b --population_size 8 --num_generations 20
-python main.py --model_name qwen3-coder:30b --population_file ../runs/<run>.json   # resume
+python main.py --model_name qwen3-coder:30b --population_file ../runs/<run>/population.json   # resume
 ```
 
 `run(args, llm=None)` does the following:
@@ -817,7 +826,7 @@ python3 computer_connection/fleet.py watch                 # fetch the logs when
 
 **Logs come back by themselves:** while the dashboard (`serve`) or `watch` is running, a run
 that goes from running to finished / stopped / failed / dead triggers a fetch of `runs/` to
-`./runs` on the Mac (its `.log`, `.json`, `.status.json` and launch `.out`) and a macOS
+`./runs` on the Mac (the run's folder: summary, population, log, review, LLM proposals) and a macOS
 notification ("allemagne: tsp_… finished, gen 20/20, best 14.948"). A dead run is fetched too,
 to keep whatever it saved. A machine that becomes unreachable is not treated as ended. The Mac
 must be on (and the dashboard or `watch` running) to catch the end. Otherwise the next `fetch`
@@ -852,7 +861,7 @@ because Gurobi work depends on the CPU (`check_same_machine` refuses other sets)
 
 **How it works.**
 - **Progress reports.** The lab machines cannot reach the Mac (NAT), so the Mac asks them. Every
-  run writes `runs/<run>.status.json` ([src/utils/status.py](src/utils/status.py)), rewritten
+  run writes `runs/<run>/status.json` ([src/utils/status.py](src/utils/status.py)), rewritten
   atomically before each child and after each generation: state, generation done, generation
   being built and child number, best and mean fitness, pid, arguments, population file.
   `GeneticAlgorithm(progress=...)` is the hook: it is called before each child. One SSH call
@@ -861,6 +870,9 @@ because Gurobi work depends on the CPU (`check_same_machine` refuses other sets)
 - **States:** `running`, `preparing`, `finished`, `stopped` (SIGTERM or Ctrl-C: `main.py` turns
   SIGTERM into a clean stop and records it), `failed` (exception, with its message), `dead` (the
   status says running but the process is gone, e.g. killed with SIGKILL), `idle`, `unreachable`.
+- **Machines with their own Gurobi license** (named-user academic license, activated with
+  `fleet.py license <host>=<key>`, see [improve_license.md](improve_license.md)) use it
+  automatically and are not counted in the limit below.
 - **Gurobi license: at most 2 runs at once.** The WLS academic license allows 2 concurrent
   sessions (tested: of 10 machines opening one together, 3 succeeded), and every solve opens
   one. start / resume therefore refuse to go beyond `--max_runs 2` runs alive in total. The Mac
@@ -897,9 +909,9 @@ attempt of the LLM, accepted or not, is saved by
 per generation:
 
 ```
-runs/<run>/gen_000/child_02_attempt_1.json
-runs/<run>/gen_000/child_02_attempt_2.json
-runs/<run>/gen_001/child_01_attempt_1.json
+runs/<run>/llm/gen_000/child_02_attempt_1.json
+runs/<run>/llm/gen_000/child_02_attempt_2.json
+runs/<run>/llm/gen_001/child_01_attempt_1.json
 ...
 ```
 
@@ -920,6 +932,8 @@ solve takes 4–9 s at `WORK_LIMIT = 10`. The run's solver now uses `CUT_TIME_LI
 A solve that hits the time limit is **rejected as too slow**, never scored: how far a solve gets
 in 20 s depends on the machine, while the work limit gives the same result everywhere.
 `prepare_instances.py` keeps the old safety values.
+*Update 2026-10-27:* `CUT_TIME_LIMIT` raised to **60 s**. With 20 s, a loaded machine (dindon)
+rejected the seed cut itself: 6.5 work units in 20 s (`learnt_results.md` 1.6).
 
 ### Step 15: Final review of the best cut under several seeds
 During a run, each fitness comes from one deterministic solve per evaluation instance, with a
@@ -929,7 +943,7 @@ by luck. At the end of a run, `main.py` now **reviews the best cut**
 cut are solved on every evaluation instance under Gurobi seeds 0..4 (`--review_seeds 5`, 0 = no
 review). For each seed, the fitness uses the run's formula against the base model **solved with
 the same seed** (so the base scores 10 at every seed). Output, in the log and in
-`runs/<run>.review.json`:
+`runs/<run>/review.json` (and in the run's `summary.md`):
 
 ```
 review of the cuts under 5 Gurobi seeds (0, 1, 2, 3, 4):
@@ -947,8 +961,160 @@ comes back too. For runs that already ended, use the script (no LLM needed):
 
 ```bash
 cd src
-python review_run.py --population_file ../runs/<run>.json --data_dir ../data/a4000
+python review_run.py --population_file ../runs/<run>/population.json --data_dir ../data/a4000
 ```
+
+### Step 16: One folder per run, with a summary
+Everything about a run is now in **its own folder** (layout in
+[src/utils/run_files.py](src/utils/run_files.py)):
+
+```
+runs/<run>/
+    summary.md        read this first
+    population.json   every generation and the best ever (to resume: --population_file)
+    status.json       where the run is (fleet.py, dashboard)
+    run.log           the full log
+    review.json       final review of the best cut under several seeds
+    llm/gen_000/child_02_attempt_1.json ...   every LLM proposal, one folder per generation
+```
+
+`summary.md` ([src/evolution/summary.py](src/evolution/summary.py)) is rewritten after every
+generation, at the end (after the review), and when the run stops or fails. It has:
+- state, machine, LLM, start, duration and settings;
+- **the best cut**: fitness, the generation where it was found, the operator, the parents, the
+  idea and the code;
+- **the review** under several seeds (mean ± std, on how many seeds it beats the seed cut);
+- **the fitness per generation** (best ever, max, mean, where the individuals come from);
+- **the LLM proposals per operator**: count, accepted, acceptance rate, format errors,
+  rejections, and the most frequent rejection reasons.
+
+It is built only from the folder's files, so `python summarize_run.py ../runs/<run>` rewrites
+it at any time, also for old runs. A resumed run keeps its folder (`--population_file
+../runs/<run>/population.json`). fleet.py writes its launch outputs in `runs/launches/`.
+
+Clean-up of 2026-10-22: the test runs of 19 October and the old flat Gurobi logs were deleted,
+and the two real runs (allemagne and finlande, 20 October) were moved to this layout with their
+summaries. Their LLM proposals were not recorded yet at the time.
+
+### Step 17: Comparing prompts without running the GA
+A full run per prompt version takes hours, and its result is noisy (Step 15). Instead,
+[src/prompt_bench.py](src/prompt_bench.py) gives every prompt variant **exactly the same
+requests** and measures what happens to the answers:
+- **Same requests:** the parents are the seed cut and the best distinct cuts of a saved run
+  (`--population_file`). Per round (`--samples`), each variant gets one initializer request,
+  one per mutation operator, and one per crossover operator, with the **same LLM seed** for the
+  same request in every variant (a paired comparison).
+- **Same checks as a run:** format, code, validity, usefulness (15-city instances, ~0.4 s,
+  `CutEvaluator.check`). Optionally a quick score of the accepted cuts on the first k
+  evaluation instances (`--score_instances k`). `--attempts 2` also tests the feedback after a
+  refusal.
+- **Report** `runs/prompt_bench/<name>/report.md`, rewritten after each round:
+  - per variant: accepted answers with a 95% confidence interval, distinct accepted cuts,
+    copies of a parent, fitness of the accepted cuts, LLM time;
+  - acceptance per task (initializer, mutation, crossover);
+  - why answers were refused (format, code error, too slow, invalid, useless);
+  - paired comparison with the first variant (accepted where the reference is not, and the
+    reverse).
+  Every answer is in `results.jsonl`.
+
+**Prompt variants** live in `prompts/variants/<name>/`. A variant overrides only what it
+changes: keys of `common.yaml` / `initializer.yaml`, or the whole operator file
+(`mutations.yaml`, `crossovers.yaml`). The six written so far, each testing one hypothesis
+(details in [prompts/variants/README.md](prompts/variants/README.md)):
+
+| variant | hypothesis |
+|---|---|
+| `rules` | answers fail because the LLM does not know how they are checked (symmetry, copies, cost) |
+| `catalog` | a list of strengthening techniques gives better ideas |
+| `reasoning` | a validity argument and a removed LP point before the code make answers more often valid |
+| `concise` | a shorter prompt suits a small model better |
+| `few_shot` | examples of refused and accepted answers teach the checks faster than rules |
+| `focused_ops` | concrete operators (Tighten, Extend, Prune, Explore; Merge, Graft) give more useful children |
+
+Run it from the Mac with fleet.py (Ollama, model and instance sets of the machine are set
+automatically, the results are fetched when it ends):
+
+```bash
+python3 computer_connection/fleet.py bench saumon -- --name first --samples 5 \
+    --population_file ../runs/tsp_qwen2.5-coder-14b_finlande_20261020_180716/population.json
+```
+
+or on a machine: `python prompt_bench.py --model_name ... --data_dir ../data/<group> ...`.
+All variants are compared unless `--variants` lists some (the first one is the reference of
+the paired comparison). **Parallel benchmarks:** split the work over several machines (one
+variant per machine, and `--sample_offset` for other rounds of the same requests), then build
+one report for all the parts:
+
+```bash
+python prompt_bench.py --merge ../runs/prompt_bench/<out> ../runs/prompt_bench/<part1> ...
+```
+
+**The report** starts with a **verdict**:
+- the variant with the most accepted answers, with its 95% interval;
+- which variants are **significantly** better or worse than `default`, using an exact McNemar
+  test on the paired requests (p < 0.05);
+- the best fitness of the accepted cuts;
+- the most distinct new cuts.
+
+Then a **ranking** (accepted answers with a text bar, interval, better / worse / p against the
+reference, distinct new cuts, copies of a parent, LLM seconds), the quality of the accepted
+cuts, the acceptance per task, the refusal reasons, and the setup. Cost: 7 requests per variant and per round (6 for `focused_ops`), so 5
+rounds × 7 variants ≈ 245 LLM answers, about 30–60 min. The winner then gets a full run with
+`main.py --prompt_variant <name>`.
+
+**First benchmark (2026-10-24)**, `runs/prompt_bench/prompts_20261024/report.md`: 1,650 answers of
+`qwen3-coder:30b` on 14 A5000 machines, 7 variants × 30 rounds. The ranking counts only *new*
+accepted cuts (answers that repeat a parent pass the checks but bring nothing).
+
+| variant | new cuts accepted | vs `default` (paired) |
+|---|---|---|
+| `rules` | 55% (49–61%) | +7 pts, p = 0.09 |
+| `focused_ops` | 51% | +3 pts, p = 0.09 (but 17% of its accepted answers are copies) |
+| `concise` | 50% | p = 0.66 (most distinct cuts) |
+| `default` | 48% (42–55%) | reference |
+| `few_shot` | 42% | p = 0.17 |
+| `reasoning` | 39% | **worse**, p = 0.02 (many copies) |
+| `catalog` | 25% | **worse**, p < 0.001 (many too-slow cuts) |
+
+The initializer prompt fails for every variant (1–5 accepted out of 30), and invalid answers are
+the main refusal: these are the two next things to improve.
+
+### Step 18: More attempts for the first generation, no duplicates
+The prompt benchmark showed that only 1–5 of 30 initializer answers pass the checks, and the
+runs of 2026-10-20 had 4 copies of the seed out of 8 in generation 0 (`learnt_results.md` 2.2).
+So the first generation now has **its own number of LLM attempts per slot**: `--max_init_attempts`
+(`MAX_INIT_ATTEMPTS = 15`, versus `--max_llm_attempts` = 3 for the other children). And an
+initial cut whose code (comments and spaces removed: `normalized_code` in
+[src/evolution/individual.py](src/evolution/individual.py)) is already in the generation is
+**refused before any solve**, with the reason sent back ("duplicate: this is the same cut as one
+already in the generation ..."), so the extra attempts bring real variety.
+
+### Step 19: Fitness averaged over several Gurobi seeds
+With one Gurobi seed the fitness is mostly luck: the seed cut alone scores from 2.6 to 14.6
+depending on the seed (`learnt_results.md` 1.2), and a cut that adds nothing won +26% (1.3).
+So each cut is now scored under **several seeds during the run**, `--fitness_seeds`
+(`FITNESS_SEEDS = [42, 43, 44]`):
+- `CutEvaluator` gets one scoring solver per seed (`scoring_solvers`). The validity and
+  usefulness checks still run once, on the first one.
+- At startup the evaluator solves the base model under every seed that `evaluation.pkl` was not
+  solved with: seed 42 reuses the stored results, while 43 and 44 cost 8 solves each (about 1.5 min).
+- Per seed it applies the review's formula (`review.score`), and the fitness is the mean:
+  `fitness = mean_s 10 * exp(-mean_i (gap_cut_i,s - gap_base_i,s) / gap_base_i,s)`. With one
+  seed, this is exactly the old fitness.
+- The bound check ("lower bound above a known tour") now uses the cheapest tour found by the base
+  model under any of the seeds.
+- The seeds are disjoint from the review seeds 0–4, so the end-of-run review stays an independent
+  check of the selected cut. `main.py` warns if they overlap.
+
+Cost: scoring is about 3x longer, and it already took 132 of the 142 min of a run on 2026-10-27
+(saumon, `llm/gen_*/*.json`: `eval_seconds` vs `llm_seconds`). A 20-generation run will take
+about 6 h, so start it in the evening (`learnt_results.md` 4.2).
+```bash
+python main.py --model_name qwen3-coder:30b --fitness_seeds 42 43 44   # the default
+python main.py --model_name qwen3-coder:30b --fitness_seeds 42         # old behaviour, 1 seed
+```
+Caveat: resuming a run started with one seed mixes old 1-seed fitness values with new 3-seed
+ones in the same population.
 
 ### Tests
 The `tests/` folder holds one file per module. Every new step adds or updates its tests.
@@ -968,21 +1134,24 @@ way scripts do (`from loaders.tsp import LoaderTSP`). Shared fixtures live in
 | [test_parser.py](tests/test_parser.py) | defaults come from `parameters.py`, flags override and are typed, a bad type is refused |
 | [test_loaders.py](tests/test_loaders.py) | instance format and bounds, names unique across seeds (and regenerable without one), reproducibility with a seed, symmetric Euclidean costs, `get` saves then reloads, `split` is disjoint and complete |
 | [test_models_tsp.py](tests/test_models_tsp.py) | model size (`n²` variables), optimum equals brute force, solution is a single tour, the baseline cut keeps the optimum |
-| [test_individual.py](tests/test_individual.py) | defaults, unique ids, `parents` lists not shared, dict round trip, `copy` makes a new individual (new id, same cut and fitness, parent recorded), other generators refused |
+| [test_individual.py](tests/test_individual.py) | defaults, unique ids, `parents` lists not shared, dict round trip, `copy` makes a new individual (new id, same cut and fitness, parent recorded), other generators refused, `normalized_code` ignores comments and spaces |
 | [test_population.py](tests/test_population.py) | wrong size and unevaluated individuals refused, history, best kept across worse generations and on ties, `top`, same id twice refused (an elite must be copied), `all_individuals` skips copies, an equal elite copy keeps the original as best, save/load |
-| [test_prompts.py](tests/test_prompts.py) | YAML files load, expected operators present, every system prompt fills with the real `create_model` source and leaves no placeholder, user templates fill; `Prompts` builds mutation / crossover / retry messages; `parse_reply` reads the format (bold labels, extra text, no backticks, indentation) and refuses bad ones; `initializer.yaml` keys, initializer messages (reference code, ideas list, best fitness) |
+| [test_prompts.py](tests/test_prompts.py) | YAML files load, expected operators present, every system prompt fills with the real `create_model` source and leaves no placeholder, user templates fill; `Prompts` builds mutation / crossover / retry messages; `parse_reply` reads the format (bold labels, extra text, no backticks, indentation) and refuses bad ones; `initializer.yaml` keys, initializer messages (reference code, ideas list, best fitness), every prompt variant fills without placeholder and keeps the IDEA/CODE format, variants override keys (common, initializer) or whole files (operators), unknown variant refused |
 | [test_llm_base.py](tests/test_llm_base.py) | `LLMClient` is abstract, failed calls retried, `LLMError` after the last try, `clean` hook applied |
 | [test_llm_fake.py](tests/test_llm_fake.py) | replies in order, each conversation recorded as sent, no reply left → `LLMError` |
-| [test_genetic.py](tests/test_genetic.py) | `initialize`: evaluated seed first then new cuts, the initializer sees the seed and the growing list of ideas, failed slot → copy of the seed, rejected baseline and second `initialize` raise; generation size kept and elite copied, `crossover_rate` picks the operator, bad format / rejected cut sent back and retried, parent copied when every attempt fails, unreachable LLM gives up at once, best fitness shown to the LLM, tournament, population of 1, same seed → same run, `progress` called before each child (not for the seed or the elites), every attempt recorded (format error, rejected with its reason, accepted with fitness and individual id, conversation and timings) |
+| [test_genetic.py](tests/test_genetic.py) | `initialize`: evaluated seed first then new cuts, the initializer sees the seed and the growing list of ideas, failed slot → copy of the seed, rejected baseline and second `initialize` raise; generation size kept and elite copied, `crossover_rate` picks the operator, bad format / rejected cut sent back and retried, parent copied when every attempt fails, unreachable LLM gives up at once, best fitness shown to the LLM, tournament, population of 1, same seed → same run, `progress` called before each child (not for the seed or the elites), every attempt recorded (format error, rejected with its reason, accepted with fitness and individual id, conversation and timings), the first generation has its own number of attempts, an initial cut repeating the generation is refused without solving |
 | [test_llm_ollama.py](tests/test_llm_ollama.py) | against a fake Ollama HTTP server: conversation sent and answer returned, `available_models`, options forwarded, unknown model retried then `LLMError`, unreachable server; plus a live test, run only with `OLLAMA_LIVE=1` (needs the tunnel) |
 | [test_sets.py](tests/test_sets.py) | validation set solved to optimality with solutions, saved then reloaded without solving, evaluation set keeps no solution, non-optimal validation instance refused (nothing saved), missing `"base"` formulation refused, refused instances replaced (new names), gives up when nothing is accepted |
 | [test_prepare_instances.py](tests/test_prepare_instances.py) | script flags default to `parameters.py` and can be overridden (`--data_dir` too), `has_gap` accepts only unsolved instances |
 | [test_review.py](tests/test_review.py) | under several seeds: the base model scores 10 at every seed, one score per seed and per model with its gaps, mean and std, JSON-serializable, table with "beats the seed cut on k/n seeds"; the score formula, instances solved by the base skipped, failed solves counted as gap 1 |
 | [test_recorder.py](tests/test_recorder.py) | one file per attempt in its generation folder, a resumed generation does not overwrite the earlier attempts |
+| [test_summary.py](tests/test_summary.py) | the summary has every section (state and duration, settings, best cut with fitness, generation found and code, review with "beats the seed cut on k/n seeds", fitness per generation including the last one, acceptance per operator, rejection reasons), a run without review or proposals, the summarize script |
+| [test_prompt_bench.py](tests/test_prompt_bench.py) | end to end with `FakeLLM` on tiny sets (two variants, format error, copy of a parent, scores, results.jsonl, report with acceptance and paired comparison), the same requests (LLM seed, parents) in every variant, parent selection (seed + best distinct), outcome classes, code normalization, Wilson interval |
+| [test_run_files.py](tests/test_run_files.py) | the run name of a population file (new and old layout) |
 | [test_status.py](tests/test_status.py) | the status file is created "running", updates keep the other fields, no temporary file left |
 | [test_transforms.py](tests/test_transforms.py) | `with_cut` runs the code with `m, gp, GRB, n, c` and keeps the optimum for a valid cut, code errors raise, `relaxed` drops integrality and keeps names, `fixed` to the optimum is feasible and to a bad point infeasible, rounding, partials compose |
-| [test_evaluator.py](tests/test_evaluator.py) | valid and useful cut gets a fitness, the fitness follows the gap formula, removing an optimal tour → invalid, implied constraint → useless, lower bound above a known solution → invalid, broken code → rejected with its error, validation set without solutions or solved evaluation instance refused, a cut hitting the time limit rejected as too slow |
-| [test_main.py](tests/test_main.py) | a small run on tiny sets with `FakeLLM` (seed + initializer, 1 generation, saved after each generation), resuming continues without a new first generation, missing sets reported, `--model_name` required, sets from another CPU or thread count refused, the status file follows the run (finished, generation, best, the run's own Gurobi log folder), an interrupted run is marked "stopped", run name with the host / the resumed file's name, end-of-run review saved (`<run>.review.json`) and the same review by `review_run.py` on the saved population |
+| [test_evaluator.py](tests/test_evaluator.py) | valid and useful cut gets a fitness, the fitness follows the gap formula, removing an optimal tour → invalid, implied constraint → useless, lower bound above a known solution → invalid, broken code → rejected with its error, validation set without solutions or solved evaluation instance refused, a cut hitting the time limit rejected as too slow, `check` runs only the validity and usefulness checks |
+| [test_main.py](tests/test_main.py) | a small run on tiny sets with `FakeLLM` (seed + initializer, 1 generation, saved after each generation), resuming continues without a new first generation, missing sets reported, `--model_name` required, sets from another CPU or thread count refused, the status file follows the run (finished, generation, best, the run's own Gurobi log folder), an interrupted run is marked "stopped", run name with the host / the resumed file's name, end-of-run review saved (`<run>.review.json`) and the same review by `review_run.py` on the saved population, everything in `runs/<run>/` with a `summary.md`, resuming from the run folder keeps its name, a review with only generation 0 |
 | [test_solver.py](tests/test_solver.py) | results stored per formulation, a valid cut keeps the optimum, `SET` and `RANDOM` seed modes, every run kept, log file named with the seed, missing `log_dir` error, infeasible model, unbounded model, isolated and in-process give the same optimum, broken formulation → `ERROR` with its message, `TOO_LARGE`, hanging build → `KILLED`, dead child → `CRASHED`, build time not in `runtime`, lambdas refused when isolated, each solve follows its own `verbose`, `keep_solution` stores the tour (both modes) and is off by default, work recorded and reproducible, `work_limit` stops the solve, machine / CPU / threads recorded (also for failed solves) |
 
 Tests that need a folder create it in pytest's temporary directory (`tmp_path`), so they
@@ -1018,6 +1187,9 @@ is in [TODO.md](TODO.md) → "Priorities".
 - [x] `GeneticAlgorithm`: tournament selection, elitism, one child per slot, mutation and crossover (Step 7)
 - [x] `src/main.py`: load the sets, build the GA, `initialize()` then N × `generation_step()`,
   save the population after each generation, resume with `--population_file` (Step 12)
+- [x] Fitness averaged over 3 Gurobi seeds during the run (Step 19)
+- [ ] Second fitness: LP relaxation (% of the root gap closed), selectable for the GA, always in the review
+- [ ] Prompts tell the LLM which fitness is used (gap or LP)
 - [x] Runs on every lab machine from the Mac: `fleet.py` (start / stop / resume / status) and its
   web dashboard, per-run status file, one instance-set folder per CPU group (Step 13)
 - [ ] Optional: stop the runs automatically before class hours (a `--until` time, or a cron job

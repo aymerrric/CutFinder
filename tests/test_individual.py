@@ -40,3 +40,9 @@ def test_copy_is_a_new_individual_with_the_same_cut(generator: str) -> None:
 def test_copy_with_another_generator_is_refused() -> None:
     with pytest.raises(ValueError):
         Individual(idea="a", code="c").copy("Lifted")
+
+
+def test_normalized_code_ignores_comments_and_spaces() -> None:
+    from evolution.individual import normalized_code
+    assert normalized_code("x = m._x  # arcs\n\nm.addConstr(x[1, 2] <= 1)") == normalized_code("x=m._x\nm.addConstr(x[1,2]<=1)")
+    assert normalized_code("a <= 1") != normalized_code("a <= 2")

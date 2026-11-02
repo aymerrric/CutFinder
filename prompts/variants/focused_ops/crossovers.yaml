@@ -1,0 +1,17 @@
+# Variant "focused_ops": two concrete crossover operators instead of the reference's four.
+# Replaces the whole crossovers.yaml.
+
+Merge: |-
+  Task (crossover: merge):
+    - You will receive two parents from the population: the Idea, Fitness and Code of each cut.
+    - Keep the valid and useful constraints of BOTH parents in one cut, remove the duplicates
+      and the constraints one parent already implies for the other, and tighten the result
+      where the combination allows it (a constraint of one parent may give a tighter constant
+      in the other).
+
+Graft: |-
+  Task (crossover: graft):
+    - You will receive two parents from the population: the Idea, Fitness and Code of each cut.
+    - Take the stronger parent (higher fitness) as the base, and graft onto it the one idea of
+      the other parent that it lacks, adapted so that the two work together (shared indices,
+      consistent constants).

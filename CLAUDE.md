@@ -17,6 +17,10 @@ Step-by-step reproduction of EvoCut (reference code: ../repos/EvoCut). The user 
 
 - Keep `README.md` up to date so anyone can follow the project: after each new piece of code, update the "Project structure" tree, add/extend the matching entry in "Progress" (what it does + a short usage example), and tick/adjust "Next steps".
 
+## Learnt results
+
+- After every run, benchmark or review, add what it teaches to `learnt_results.md`. Each entry must be supported by recorded data: name the files (`runs/...`) and quote the numbers. No claim without data; say so when a fact is not stored in a file.
+
 ## Tests
 
 - `tests/` (pytest, run `pytest` from the project root; `pytest.ini` adds `src/` to the path) holds one `test_<module>.py` per module. With every new or changed piece of code, add/update its tests in the same step and run them.
