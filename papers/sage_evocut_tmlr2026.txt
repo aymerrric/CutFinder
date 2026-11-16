@@ -1,0 +1,2919 @@
+=====PAGE 1
+Published in Transactions on Machine Learning Research (10/2026)
+LLM-Guided Evolution of Symbolic Acceleration Inequality
+Families for MILP
+Milad Y azdani∗ milad.yazdani@ece.ubc.ca
+Department of Electrical and Computer Engineering
+University of British Columbia, Vancouver, BC, Canada
+Mahdi Mostajabdaveh † mahdi.ms86@gmail.com
+Huawei Technologies Canada, Burnaby, BC, Canada
+Samin Aref samin.aref@utoronto.ca
+Department of Mechanical and Industrial Engineering
+University of Toronto, Toronto, ON, Canada
+Zirui Zhou zirui.zhou@huawei.com
+Huawei Technologies Canada, Burnaby, BC, Canada
+Reviewed on OpenReview: https: // openreview. net/ forum? id= rxJvINT074
+Abstract
+Integer programming (IP) is central to many combinatorial optimization tasks but remains
+challenging due to its NP-hard nature. A practical way to improve IP solvers is to manually
+design inequality families that exploit problem structure. However, this creative process
+requires deep expertise and has therefore been diﬃcult to automate. Our proposed frame-
+work, Symbolic Acceleration via Generative Evolution ( SAGE), automates symbolic dis-
+covery of acceleration inequality families at the modeling level. It reasons over a symbolic
+IP formulation and a natural language description of the problem to discover a reusable
+set of acceleration inequality families that can be instantiated for each problem instance.
+These acceleration inequality families are selected through empirical admissibility and im-
+pact screening rather than mathematical proofs. SAGE (i) initializes a population of candi-
+date acceleration inequality families via an initializer agent that uses an LLM; (ii) it screens
+candidates for admissibility on a small development admissibility set for solution feasibility
+and the separation of the relaxation solution; and (iii) it iteratively reﬁnes the population
+of inequalities through evolutionary crossover and mutation agents. Across seven MILP
+benchmarks, SAGE reduces optimality gaps by up to 62.1% relative to baseline MILP
+formulations solved with a ﬁxed time budget and reaches target gaps up to 5.51× faster
+according to shifted geometric mean speedup. Comprehensive ablations show its robustness
+across diﬀerent LLM backends and across solvers and internal cut settings. Code
+1 Introduction
+Operations Research (OR) workﬂows usually consist of two main phases: formulating an optimization model
+and solving it. The ﬁrst phase involves understanding the problem, identifying decision variables, objectives,
+and constraints, and building a mathematical formulation. The second phase uses numerical algorithms and
+generic optimization solvers to ﬁnd exact or approximate solutions. As problems become more complex in
+practice, using artiﬁcial intelligence (AI) to improve OR has become increasingly important. Recent advances
+∗Work conducted during an internship at Huawei Technologies Canada.
+†Corresponding author.
+1
+arXiv:2508.11850v3  [cs.AI]  19 Oct 2026
+=====PAGE 2
+Published in Transactions on Machine Learning Research (10/2026)
+All demand must be served, so total shipped demand equals 
+. Opened warehouses provide at most 
+capacity, hence . If only  warehouses are
+opened, the maximum possible opened capacity is the sum of
+the  largest capacities. Therefore,  must be at least the
+smallest value such that the top-  capacities cover .
+SAGE
+Instances
+DevelopmentDeployment
+Symbolic MILP
+Formulation
+Solver
+Presolve
+Cut Selection
+Branch and Bound
+Heuristics
+...
+Solver Mechanisms
+Instance MILP
+Instantiated
+acceleration
+inequality family
+Acceleration Inequality
+Family
+Figure 1: View of SAGE in two stages: during development, SAGE learns a reusable set of acceleration
+inequality families for a symbolic MILP formulation using a natural language description. During deployment,
+the families are instantiated for each problem instance and appended to its instantiated MILP before solving.
+have used large language models (LLMs) to automate mathematical modeling, converting natural language
+descriptions directly into mathematical formulations Ramamonjison et al. (2023); Jiang et al. (2025); Huang
+et al. (2025); Mostajabdaveh et al. (2025). While there have been promising results in generating correct
+models, improving the eﬃciency of those models remains challenging. Parallel eﬀorts have applied AI to
+the solving phase, including AI for heuristic design Liu et al. (2024); Ye et al. (2024) and machine learning
+techniques for accelerating generic optimization solvers Alvarez et al. (2017); Li et al. (2023). However,
+the crucial feedback loop between how a problem is formulated and how eﬃciently it can be solved remains
+largely unexplored. Optimization problems can often be formulated in multiple ways, with solver performance
+varying substantially depending on the formulation and its interaction with the solver Klotz & Oberdieck
+(2024).
+In this study, we focus on static model augmentation before calling the solver for Mixed Integer Linear
+Programming (MILP). Starting from a base MILP formulation, we generate additional linear inequality
+families, called acceleration inequality families, intended to improve solver eﬃciency. Many widely studied
+problem classes admit problem-speciﬁc inequalities derived in the OR literature. However, we aim for a
+general pipeline that operates directly on a symbolic MILP formulation shared across instances. We refer to
+this shared formulation as the symbolic MILP formulation and to its specialization with instance data as the
+instantiated MILP. Our proposed method, Symbolic Acceleration via Generative Evolution ( SAGE), uses
+LLM agents guided by evolutionary search to discover and reﬁne such families by reasoning over a symbolic
+MILP formulation and a natural language description of the problem. In particular, SAGE learns a reusable
+set of acceleration inequality families during development and instantiates them for each problem instance
+at deployment time (Fig. 1). SAGE is a general framework for symbolic discovery at the modeling level and
+integrates into standard solver pipelines across diﬀerent MILP models.
+Other methods also augment or transform a MILP: manual formulation strengthening and solver presolve
+act before branch-and-bound begins, and solver cuts and learned runtime policies act during it. Table 1
+separates SAGE from these mechanisms on ﬁve axes: the stage at which each acts, whether it uses
+problem-speciﬁc structure, whether it operates on the symbolic MILP formulation or on the instantiated
+MILP, whether it is manual or automated, and what it returns. Formulation strengthening uses problem-
+speciﬁc structure at the level of the symbolic formulation, is derived manually by an expert, and returns
+a tighter equivalent formulation of the problem class, established through a proof of validity or of equiva-
+lence Vielma (2015); Klotz & Oberdieck (2024). SAGE works at the same level and with the same kind of
+2
+=====PAGE 3
+Published in Transactions on Machine Learning Research (10/2026)
+Table 1: SAGE compared with other mechanisms that augment or transform a MILP: the stage at which
+each acts, whether it uses problem-speciﬁc structure, what it operates on, whether it is manual or automated,
+and what it returns.
+Mechanism Stage Problem-speciﬁc structure Operates on Derivation Output
+SAGE
+Model design,
+before the solver
+is called
+Yes, for a
+problem class
+Symbolic MILP
+formulation
+Automated, by
+LLM agents with
+evolutionary
+search
+A reusable acceleration
+inequality family,
+instantiated for each
+instance
+F ormulation
+strengthening
+(Vielma, 2015; Klotz &
+Oberdieck, 2024)
+Model design,
+before the solver
+is called
+Yes, for a
+problem class
+Symbolic MILP
+formulation
+Manual, by an
+expert
+A tighter equivalent
+formulation of the
+problem class
+Solver presolve
+(Savelsbergh, 1994;
+Achterberg et al. , 2020)
+Inside the solver,
+before
+branch-and-bound
+No, generic
+reductions
+Instantiated
+MILP
+Automated, by
+solver routines
+A reduced model of
+that one instance
+Solver cuts and learned
+runtime policies
+(Turner et al. , 2023;
+Gasse et al. , 2019;
+Li et al. , 2023)
+Inside the solver,
+during
+branch-and-bound
+No, generic cuts or
+learned policies
+Instantiated
+MILP
+Automated, by
+solver routines or
+trained policies
+Cuts and search
+decisions during the
+solve
+structure, but derives a reusable acceleration inequality family automatically, screens it empirically, and in-
+stantiates it for each instance of the class. Solver presolve applies generic, correctness-preserving reductions,
+such as bound tightening and probing, to the instantiated MILP inside the solver and returns a reduced
+model for that one instance Savelsbergh (1994); Achterberg et al. (2020). Solver cuts and learned runtime
+policies also act inside the solver, during branch-and-bound, on the instantiated MILP (Section 2). SAGE
+augments the symbolic formulation before submission, so presolve and the runtime mechanisms run on the
+augmented instantiated MILP, and the mechanisms are complementary.
+Together, this paper makes three contributions. First, we introduce SAGE, a general framework for symbolic
+discovery of empirically screened acceleration inequality families at the modeling level . Given a symbolic
+MILP formulation and a small admissibility set, SAGE discovers and selects a reusable set of acceleration
+inequality families that can be instantiated for each problem instance. Second, we evaluate SAGE on seven
+diverse MILP problems and show consistent solver speedups on unseen instances. The largest row-average
+checkpoint gap reduction is 62.1%, and the largest row-average target-gap speedup is 5.51×. On the four
+benchmarks with published valid inequalities, the discovered families match or exceed the mean speedups
+from those inequalities under the same protocol (Section 5.5). Third, we provide an ablation and robustness
+analysis of SAGE: (a) data eﬃciency by varying the sizes of the impact-assessment and admissibility sets
+(Section 5.8), (b) LLM sensitivity across DeepSeek-R1, Gemini 3 Pro, and GPT-5.1 (Table 2), (c) solver
+robustness by transferring the same discovered acceleration inequality families across solvers (Section 5.7.1),
+and (d) interaction with solver internal cut generation by comparing Gurobi with internal cuts disabled vs.
+default settings (Section 5.7.2).
+2 Related Work
+Recent work has explored using LLMs to automate various stages of OR workﬂows, from problem under-
+standing to algorithm generation Liu et al. (2026); Huang et al. (2024). A central line of research focuses
+on converting natural language descriptions into optimization formulations, initiated by the NL4Opt com-
+petition Ramamonjison et al. (2023) and advanced by systems such as OptiMUS AhmadiTeshnizi et al.
+(2024), ORLM Huang et al. (2025), and LM4Opt Ahmed & Choudhury (2024). Recent frameworks with
+multiple agents incorporate dedicated veriﬁcation agents to ensure correctness before generating code that
+3
+=====PAGE 4
+Published in Transactions on Machine Learning Research (10/2026)
+can be passed directly to a solver, including the chain of experts Xiao et al. (2023) and the staged agent
+architecture of Mostajabdaveh et al. (2024). These eﬀorts focus on modeling ﬁdelity. In contrast, SAGE
+targets eﬃciency after a base formulation already exists: it proposes additional acceleration inequality fam-
+ilies, screens them empirically on held-out instances, and ranks them by measured eﬀect on time-limited
+solver progress. To our knowledge, prior research has not studied the automatic discovery of reusable accel-
+eration inequality families that augment the symbolic model before the solver is called. Another emerging
+direction uses LLMs within evolutionary frameworks to generate heuristics for combinatorial optimization.
+These methods aim to boost heuristic algorithm performance by modifying parts of the algorithm code (e.g.,
+heuristic rules) Liu et al. (2024); Ye et al. (2024). FunSearch Romera-Paredes et al. (2024) couples a frozen
+LLM with evolutionary search and an evaluator to discover heuristics, while the evolution of heuristics Liu
+et al. (2024) reﬁnes natural language "thoughts" and executable code using evolutionary strategies. ReEvo Ye
+et al. (2024) introduces reﬂective evolution with pairwise comparisons and reﬂections over longer horizons
+to improve code generated by LLMs iteratively. While these works evolve heuristics or code, SAGE evolves
+reusable acceleration inequality families. More broadly, machine learning for MILP solving has targeted
+decisions inside branch-and-bound: learned branching approximates strong branching or variable-selection
+policies Alvarez et al. (2017); Khalil et al. (2016); Gasse et al. (2019); learned cut selection chooses which
+generated cuts to apply Tang et al. (2020); Turner et al. (2023); Paulus et al. (2022); Wang et al. (2023);
+separator-conﬁguration methods such as L2Sep, cold-start LLM conﬁguration, and dynamic separator con-
+ﬁguration decide which solver separators to activate during the solve Li et al. (2023); Lawless et al. (2025);
+Ye et al. (2026); learned or optimized cut-generation mechanisms select cut-generating functions Chételat &
+Lodi (2023); Cheng & Basu (2024); and learned primal heuristics aim to ﬁnd incumbents early Shen et al.
+(2021). The central distinction is that these methods modify runtime policies within the solver’s branch-
+and-bound process, whereas SAGE operates one level earlier: it augments the symbolic MILP formulation
+before the solver is called, producing reusable acceleration inequality families that can then be solved with
+any branching, cut-selection, separator-conﬁguration, cut-generation, or primal-heuristic policy. Thus our
+contribution is not a replacement for ML solver policies but an orthogonal modeling-level layer; the same
+learned runtime policy can be run on the baseline formulation or on the SAGE-augmented formulation.
+3 Preliminaries
+To motivate an automatic yet reliable generator of acceleration inequality families, we ﬁrst recall the baseline
+MILP and deﬁne the acceleration inequality families that SAGE discovers. We then relate them to the linear
+relaxation and to the classical notions of valid and optimality-preserving inequalities. Our goal is to discover
+useful acceleration inequality families, including valid inequalities when possible, and to retain them through
+empirical screening and measured solver progress.
+We consider an MILP of the form
+max
+{
+c⊤x + h⊤y : Ax + Gy ≤ b, x ∈ Zn ≥0, y ∈ Rp ≥0 } , (1)
+with integer variables x∈ Zn ≥0 and continuous variables y∈ Rp ≥0. Its feasible set is
+S = { (x, y)∈ Zn ≥0× Rp ≥0 : Ax + Gy≤ b}.
+Throughout the paper we use the term additional inequality family to mean a set of linear inequalities
+appended to the MILP. We write such a family in the form
+C :=
+{
+A′ rx + G′ ry + H ′ rz≤ δr } r∈R,
+where R is an index set and z denotes auxiliary variables introduced by the added inequalities. Including
+z allows the inequality family to encode additional logical relations. In practice, one may add inequality
+families only to speed up solving. We call any such added inequality family, tailored to a particular problem
+class, an acceleration inequality family.
+4
+=====PAGE 5
+Published in Transactions on Machine Learning Research (10/2026)
+Deﬁnition 3.1 (Acceleration inequality family) . An additional linear inequality family added to an
+MILP with the explicit aim of reducing solution time. Such a family need not be composed only
+of proven valid inequalities or proven optimality-preserving inequalities; in this work, it is retained
+only after empirical admissibility checks that (i) stored reference solutions remain feasible on a small
+admissibility set and (ii) at least one stored LP-relaxation solution is separated, with quality assessed
+by solver progress on an impact-assessment set.
+Relaxing integrality yields the linear programming (LP) relaxation
+max
+{
+c⊤x + h⊤y : Ax + Gy ≤ b, x ∈ Rn ≥0, y ∈ Rp ≥0 } , (2)
+whose feasible set (the linear relaxation set) is
+P ={ (x, y)∈ Rn ≥0× Rp ≥0 : Ax + Gy≤ b}.
+Although Eq. ( 2) can be solved in polynomial time, its optimum is generally fractional (i.e., not in S). This
+motivates cutting-plane and branch-and-cut methods, in which a solver adds valid inequalities dynamically
+during the solve. By contrast, SAGE produces acceleration inequality families at the user or model level
+that are appended to the MILP before calling the solver.
+Formally, an inequality
+w⊤(x, y) ≤ δ
+is valid for a set Q if and only if Q⊆{ (x, y) : w⊤(x, y)≤ δ}. Designing strong valid inequalities tailored to
+a speciﬁc problem class typically requires nontrivial proofs and insight into the combinatorial structure of
+the problem.
+Separately, an inequality is optimality-preserving for Eq. ( 1) if it does not change the optimal value Z ∗ =
+max{c⊤x + h⊤y : (x, y)∈ S}, i.e.,
+max{c⊤x + h⊤y : (x, y)∈ S, w ⊤(x, y)≤ δ} = Z ∗,
+even though it may remove other feasible solutions Laporte & Semet (1999); da Cunha et al. (2015). We
+reserve the term optimality-preserving for inequalities that are proved to satisfy this. Appendix D reviews
+the geometry of valid and optimality-preserving inequalities and their eﬀect on the linear relaxation set
+(Appendix D.1), polyhedra and facets (Appendix D.2), and facet-deﬁning valid inequalities (Appendix D.3).
+SAGE’s acceleration inequality families diﬀer from several classical objects. A valid inequality is proved
+to contain all feasible integer points in S. A formulation strengthening is a reformulation or augmentation
+with established validity for the model class. Benders cuts are derived from a decomposition subproblem
+and added through a master-subproblem scheme. By contrast, a SAGE acceleration inequality family is
+proposed before solving and kept because it passes empirical optimal solution screening (OSS) and LP-
+separation checks and improves solver progress. OSS checks whether the family preserves stored reference
+solutions on sampled instances. No global proof of validity or optimality preservation is assumed.
+Modern MILP solvers routinely inject cuts that are general purpose during solving and that apply to many
+formulations ( Chvátal, 1973; Balas, 1979). Commercial solvers such as Gurobi enable these cut-generation
+routines by default or through solver parameters ( Gurobi Optimization LLC , 2026). Separately, problem-
+speciﬁc structure often gives rise to inequalities that improve solver speed in vehicle routing, network design,
+scheduling, and graph models ( Toth & Vigo , 2002; Lysgaard et al. , 2004; Costa et al. , 2009; Queyranne
+& Wang , 1991; Aref et al. , 2020). Given a symbolic MILP formulation, SAGE automatically proposes,
+empirically screens, and evolves acceleration inequality families to improve solve time.
+4 Proposed Method
+We propose SAGE, an evolutionary algorithm powered by multiple LLM agents to iteratively generate and
+reﬁne acceleration inequality families that speed up solving across instances of a given MILP model. Candi-
+date acceptance is determined by empirical admissibility and impact screens, not by a proof of global validity.
+5
+=====PAGE 6
+Published in Transactions on Machine Learning Research (10/2026)
+Intersection Complement Hybrid Min Violation
+Feedback
+Termination
+Condition
+Tournament
+Selection
+Crossover Agent
+Mutation Agent
+General Lifted Exploratory
+Uniform
+Selection
+Uniform
+Selection
+New Candidate Family
+Generator
+Inequality Admissibility Screen
+Inequality Impact Scorer
+Elite Selection
+...Evolution Evolution
+...
+Problem Code
+Inequality
+Admissibility Screen
+Initializer
+Feedback
+Previous Ideas
+Initializer Agent
+Inequality
+Impact Scorer
+...
+...
+Termination
+Condition
+idea/code/
+Initializer
+...
+...
+idea/code/fitness
+Figure 2: SAGE workﬂow: an initializer agent proposes a population of candidate acceleration inequality
+families. Each candidate passes through the Inequality Admissibility Screen for code validity, OSS on
+the admissibility set Dadm, and an LP-separation check, then through the Inequality Impact Scorer on
+Dimp to obtain an inequality impact score based on the optimality gap. Tournament/elite selection and
+crossover/mutation driven by LLM agents generate the next population.
+Fig. 2 illustrates the ﬂow diagram of SAGE at a high level. In addition, Appendix A (Algorithm 1) provides
+the pseudocode and additional details for the overall procedure. Our proposed method can be summarized
+in three main phases: (1) data preprocessing, (2) population initialization (driven by the initializer agent),
+and (3) evolution (crossover and mutation driven by LLM agents). Next, we describe these phases, the
+Inequality Admissibility Screen, and the Inequality Impact Scorer.
+We begin by splitting available development instances for a given MILP into an impact-assessment set Dimp
+and an admissibility set Dadm. We use Dadm only as a development screen for OSS and LP-separation
+checks, and Dimp to score candidate family quality. For every instance i∈ Dimp, we run the baseline MILP
+under a ﬁxed computational budget. We use Gurobi’s WorkLimit parameter, set to 10 ( Gurobi Optimization
+LLC, 2026), and record its terminal optimality gap, gapref (i). We construct Dimp so that gapref (i) > 0 for
+all i∈ Dimp. This reference gap serves as the baseline for assessing the eﬀect of candidate acceleration
+inequality families on solver performance within SAGE. For the smaller subset Dadm, we also store (i) a
+solver solution (ˆx∗ i , ˆy∗ i ) from solving the MILP to an optimality gap tolerance of 10−5 (for the OSS check)
+and (ii) the LP relaxation optimum (xLP i , yLP i ) (for the LP-separation check). Thus, Dimp stores gapref (i),
+while Dadm stores (ˆx∗ i , ˆy∗ i ), (xLP i , yLP i ), and gapref (i) for each instance i.
+With these datasets in place, SAGE seeds an initial population of candidate acceleration inequality families
+using an initializer agent. At each iteration, the LLM agent receives three inputs: (1) the complete MILP
+formulation code with a natural language description of model components (Fig. 1), (2) the set of acceleration
+inequality families generated so far, and (3) instructions to propose novel acceleration inequality families
+intended to separate poor LP-relaxation behavior in Eq. ( 2). The LLM response includes a brief idea for
+the proposed family together with executable code (e.g., Pyomo Hart et al. (2011)). Each LLM-proposed
+6
+=====PAGE 7
+Published in Transactions on Machine Learning Research (10/2026)
+Yes Yes
+Inequality Admissibility Screen
+Instances
+Solution
+Code Check OSS Check LP-separation check Yes
+Feedback
+Figure 3: SAGE Inequality Admissibility Screen: candidate family code must compile (code check), pass
+OSS check on the admissibility set Dadm (i.e., not exclude the recorded reference solution), and separate at
+least one stored fractional LP optimum (LP-separation check). Failures trigger feedback and regeneration.
+candidate acceleration inequality family is ﬁrst passed through the Inequality Admissibility Screen, which
+checks whether the candidate can be implemented, preserves the stored reference solutions in the admissibility
+set Dadm, and separates at least one LP-relaxation solution. We log each family idea to prevent duplication.
+This loop continues until the population reaches its predeﬁned size, at which point the admissible and distinct
+candidates enter the evolutionary search phase (Fig. 2).
+To enter the population, each newly proposed candidate acceleration inequality family C must pass three
+admissibility checks (Fig. 3): (i) a code check, (ii) an OSS check, and (iii) an LP-separation check. Whenever
+a check fails, the agent receives the diagnostic as feedback and may revise the candidate up to a preset retry
+limit (Algorithm 1 in Appendix A). First, we run the code check by parsing and compiling the code snippet
+that implements C. If a syntax or runtime error occurs, C fails the code check. Next, we perform the OSS
+check to ensure that adding C does not exclude the recorded reference solutions on Dadm. Concretely, for each
+i∈ Dadm, we ensure that the recorded solution (ˆx∗ i , ˆy∗ i ) remains feasible after appending C to the baseline
+MILP (Eq. ( 1)). We ﬁx (x, y) = (ˆx∗ i , ˆy∗ i ) and solve the resulting reduced model to test feasibility. Because C
+may introduce auxiliary variables, we cannot simply evaluate the inequalities on the ﬁxed solution. Instead,
+we ask whether there exists z that makes the added inequalities feasible. This solve is eﬃcient because all
+original variables are ﬁxed. If the reduced model is infeasible, C fails the OSS check. Formally, for instance
+i, C passes the check iﬀ there exists z such that
+A′ r ˆx∗ i + G′ r ˆy∗ i + H ′ r z ≤ δr ∀r∈ R
+is feasible. Otherwise, C fails the OSS check for instance i.
+If C passes the OSS check, we ﬁnally run the LP-separation check by discarding any candidate acceleration
+inequality family that does not separate any stored LP optimum in Dadm. For each i∈ Dadm, we relax all
+integrality constraints, ﬁx (x, y) =
+(
+xLP i , yLP i ) , and test feasibility with C appended. We retain C iﬀ there
+exists i∈ Dadm such that⁄∃ z with
+A′ r xLP i + G′ r yLP i + H ′ r z ≤ δr ∀r∈ R
+(i.e., the reduced LP becomes infeasible). Otherwise, C is discarded. This LP-separation check is a minimal
+check: passing it is suﬃcient to show that C removes at least one sampled point of the LP relaxation. It
+does not imply that all alternative LP optima are removed, that the root bound improves, or that branch-
+and-bound search improves. These eﬀects are assessed by the impact scorer on Dimp and by the test-set
+solve metrics.
+Candidate families that pass this screen are then processed by the Inequality Impact Scorer. We append C
+to the baseline MILP and solve every impact-assessment instance i∈ Dimp under the same budget, record
+the resulting optimality gap gapaug(i), and compare it to gapref (i). The key intuition is that a candidate
+family should receive a higher inequality impact score when it reduces the gap on average, and a lower score
+when it increases it. We implement this by averaging the signed relative gap change over Dimp and applying
+a monotone mapping, which gives the score
+d(i) = gapaug(i)− gapref (i) gapref (i) , ¯d = 1 |Dimp| ∑ i∈Dimp d(i), s imp(C) = 10 e− ¯d.
+7
+=====PAGE 8
+Published in Transactions on Machine Learning Research (10/2026)
+A beneﬁcial family has ¯d < 0, so larger gap reductions yield exponentially higher inequality impact scores
+simp(C) (Appendix H).
+With the initial population of admissible and scored candidate families ready, the SAGE algorithm evolves
+the population for T generations. The main steps of the evolution are as follows: (i) Elitism: The top re
+fraction of families with the highest inequality impact scores carry over to the next generation. (ii) Selection:
+Parent families are picked via tournament selection based on inequality impact score. (iii) Crossover: With
+probability Pc, two parents are passed to a Crossover LLM, which attempts to produce a new child family
+Co by merging parent features. (iv) Mutation: With probability Pm, a single parent undergoes a Mutation
+LLM, which alters coeﬃcients or terms to produce a variant Cm. (v) Admissibility Screening & Impact
+Scoring: Each newly created candidate (Co or Cm) is checked by the Inequality Admissibility Screen. Failed
+candidates are discarded, and a feedback prompt is provided to the LLM (up to a predeﬁned maximum retry
+limit). Admissible candidates are then forwarded to the Inequality Impact Scorer. Their inequality impact
+scores are computed and then they are added to the next generation. At each iteration, reproduction (i.e.,
+the generation of a new candidate family) continues until the next population reaches its required size. This
+evolutionary process then repeats for T generations. In each reproduction step, SAGE chooses whether
+to perform crossover (with probability Pc) or mutation (with probability Pm). Once the operation type is
+chosen, one of the corresponding agents is selected uniformly at random.
+SAGE draws on seven agents, three for mutation and four for crossover. Each mutation agent rewrites a
+single parent family. General Mutation modiﬁes its structure or its coeﬃcients. Lifted Mutation strengthens
+the parent in the style of lifting ( Balas, 1975; Desrochers & Laporte , 1991), by assigning coeﬃcients to
+variables its inequalities leave out, or by adding auxiliary structure. Exploratory Mutation moves away
+from the parent to reach a distinct family. Each crossover agent combines two parent families. Intersection
+Crossover keeps useful structural elements from each parent. Complementary Crossover looks for structure
+that neither parent covers. Hybrid Crossover takes structure from one parent and numerical or conditional
+features from the other. Min Violation Crossover merges the parents so that the child keeps the recorded
+reference solutions feasible, which is what the OSS check requires. Appendix B gives the full prompts.
+5 Experiments and Results
+We structure our evaluation around three questions. RQ1 asks whether SAGE improves solver eﬃciency on
+unseen instances. We measure checkpoint optimality gaps and time to target gaps. RQ2 asks how sensitive
+SAGE is to the sizes of the impact assessment set Dimp and admissibility set Dadm. We vary |Dimp| and
+|Dadm| and report test set gap metrics for the selected acceleration inequality family. RQ3 asks how the
+evolutionary search shapes the acceleration inequality families that the LLMs generate. We compare the
+acceptance rates of the parent-based operators with those of the one-shot initializer and track inequality
+impact scores across generations. We also compare SAGE with a token matched initializer only control on
+JSSP.
+The subsections answer these questions in order. Sections 5.2 and 5.3 answer RQ1 with checkpoint gaps
+and time to target, and Section 5.4 then checks that the families measured there exclude no proven optimal
+solution. Sections 5.5 to 5.7 test the RQ1 result against published valid inequalities, learned solver policies,
+a second solver, and two internal cut settings. Section 5.8 answers RQ2, Section 5.9 answers RQ3, and
+Section 5.10 interprets one selected family.
+5.1 Experimental Setup
+We evaluate SAGE by comparing the baseline MILP to the baseline augmented by the selected SAGE
+acceleration inequality family under ﬁxed solver budgets, across seven NP-hard MILP benchmarks (Table 2).
+As the MILP solver, we use the Gurobi Optimizer 10.0.0 (build v10.0.0rc2, Linux 64-bit), which is widely
+regarded as one of the fastest commercial MIP solvers Rehfeldt et al. (2023). We access Gurobi via the
+Pyomo interface Hart et al. (2011) using eight threads. Unless otherwise stated, solver parameters are
+defaults except for MIPGap=1e-5 and the parameters stated here. We ﬁx Method=4 (deterministic concurrent
+algorithm for continuous models and the initial root relaxation). We set Gurobi’s WorkLimit parameter to
+8
+=====PAGE 9
+Published in Transactions on Machine Learning Research (10/2026)
+10 ( Gurobi Optimization LLC , 2026), for SAGE’s internal impact-assessment runs (Section 4). We set
+TimeLimit=2000 s for test set benchmarking. The work limit controls the development budget for scoring
+candidates and can therefore aﬀect impact scores, rankings, and the selected family. The time limit deﬁnes
+the test horizon over which we measure terminal gaps, target counts, and speedups. In SAGE, we run
+T = 20 generations with a population size of |P| = 8 , using a mutation probability of Pm = 0 .3, an elitism
+ratio of re = 0.2, and a crossover probability of Pc = 0.7. Agents may retry candidate family generation up
+to three times if admissibility checks fail. We cap one complete search at 20 hours, and every search ﬁnished
+within this cap. The runtime varies with the LLM inference provider, its latency and rate limits, and the
+solver time spent scoring candidates. We use Gemini 3 Pro ( Google DeepMind , 2025) as the main LLM in
+SAGE (Table 22 in Appendix G gives the full API settings and approximate costs). Unless otherwise stated,
+the main results use the family selected from the Gemini 3 Pro SAGE run for each benchmark. To assess
+sensitivity to the LLM, we also run SAGE with DeepSeek-R1 Guo et al. (2025) and GPT-5.1 OpenAI (2025)
+(Table 2).
+Our four core benchmarks include: Traveling Salesman Problem (TSP), Multi-Commodity Network Design
+(MCND), Capacitated Warehouse Location Problem (CWLP), and Job Shop Scheduling Problem (JSSP).
+Additionally, we report results on the Pickup and Delivery Problem with Time Windows (PDPTW), In-
+ternational Mathematical Olympiad 2025 Problem 6 (IMO6), and a unit commitment benchmark with a
+horizon under one hour (SHUC) (Table 2). IMO6 is a newly formulated MILP benchmark of a 2025 IMO
+problem, so LLMs are less likely to have been exposed to optimization literature speciﬁc to it. PDPTW
+and SHUC are practically motivated models with many constraints, and some of our instances are included
+in MIPLIB Koch et al. (2011). The test set sizes are 54 (TSP), 81 (MCND), 36 (CWLP), 80 (JSSP), 165
+(PDPTW), 34 (IMO6), and 56 (SHUC). Appendix F provides a dedicated subsection for each benchmark
+problem, including its formulation, instance source, and dataset details: TSP (Appendix F.1), MCND (Ap-
+pendix F.2), CWLP (Appendix F.3), JSSP (Appendix F.4), PDPTW (Appendix F.5), IMO6 (Appendix F.6),
+and SHUC (Appendix F.7). Tables 20 and 21 in Appendix F summarize the held-out test set scales and
+the synthetic development source scales, respectively. During evolution, SAGE relies on relatively small
+development datasets Dimp (default size 10) and Dadm (default size 2), as detailed in Section 4. The default
+|Dadm| = 2 is used only for candidate screening during development. We do not use benchmark test instances
+during development. For all problems except IMO6, both Dimp and Dadm are drawn from synthetic gener-
+ators released alongside our code. The test set Dt is separate and consists of public benchmark instances.
+For IMO6, all instances are generated and split into Dimp, Dadm, and Dt.
+5.2 Generalization to Unseen Instances
+We compare the baseline MILP to the baseline MILP augmented with the selected SAGE acceleration
+inequality family on unseen test instances in Dt. Each instance is solved twice under a 2000 s wall clock
+limit: once as the baseline MILP (reference) and once with the selected acceleration inequality family. At
+each of the seven checkpoints (5 s, 10 s, 50 s, 150 s, 300 s, 1000 s, 2000 s), we record the optimality gap g
+reported by the solver. We then compute the stabilized relative gap improvement:
+∆g(i, t) = gref (i, t)− gaug(i, t) max{gref (i, t), ϵ} , ϵ = 10 −5.
+This avoids division by very small reference gaps. We report ¯∆g, the average of ∆g over all instances in
+Dt. At a checkpoint, ∆g > 0 iﬀ gaug < g ref . We summarize checkpoint performance in Table 2, reporting
+¯∆g ±σ (%) across the test set at each checkpoint for each benchmark and LLM. In Table 2, the mean relative
+gap improvement is positive at 2000 s for all 21 benchmark/LLM pairs. At 2000 s, the mean ranges from
+4.3% on SHUC with Gemini 3 Pro to 70.7% on PDPTW with Gemini 3 Pro. The row-average checkpoint
+improvement is positive for all 21 rows. Gemini 3 Pro has the largest row average on TSP (25.1%), CWLP
+(52.6%), JSSP (62.1%), and PDPTW (57.4%). The largest single checkpoint mean is 76.3% on CWLP
+with Gemini 3 Pro at 150 s. GPT-5.1 has the largest row average on MCND (17.9%) and IMO6 (31.1%).
+DeepSeek-R1 has the largest row average on SHUC (22.5%). A veraging the 7 row results by LLM gives
+aggregate improvements of 36.5% for Gemini 3 Pro, 26.4% for GPT-5.1, and 21.9% for DeepSeek-R1. Fig. 7
+in Appendix E.1 illustrates the full 2000 s time proﬁles. For SHUC with Gemini 3 Pro, the checkpoint means
+move from 51.2% at 5 s to 3.7% at 300 s and 4.3% at 2000 s.
+9
+=====PAGE 10
+Published in Transactions on Machine Learning Research (10/2026)
+Table 2: Test set mean stabilized relative gap improvement ¯∆g (%) from adding the selected SAGE accel-
+eration inequality family (Gurobi, three LLMs). Mean ±σ is reported at each checkpoint. Positive values
+correspond to gaug < g ref at that checkpoint. A verage reports the row average of checkpoint means.
+Problem LLM 5 s 10 s 50 s 150 s 300 s 1000 s 2000 s A verage
+TSP
+DeepSeek-R1 8.2 (± 26.0) 9.1 (± 26.9) 11.9 (± 32.2) 18.1 (± 30.9) 18.5 (± 33.8) 12.9 (± 31.3) 20.7 (± 30.7) 14.2
+Gemini 3 Pro 13.1 (± 27.5) 15.0 (± 27.9) 22.6 (± 31.3) 34.2 (± 30.3) 27.6 (± 33.1) 26.4 (± 33.3) 37.0 (± 31.1) 25.1
+GPT-5.1 12.1 (± 28.4) 8.8 (± 29.7) 15.6 (± 33.2) 17.4 (± 34.1) 11.3 (± 35.0) 16.7 (± 33.8) 18.2 (± 31.6) 14.3
+MCND
+DeepSeek-R1 3.3 (± 17.8) 4.3 (± 19.9) 11.7 (± 27.0) 13.0 (± 28.2) 14.7 (± 28.9) 18.9 (± 32.4) 16.7 (± 29.7) 11.8
+Gemini 3 Pro 6.8 (± 17.7) 8.2 (± 19.9) 15.1 (± 25.8) 17.4 (± 26.9) 17.8 (± 25.5) 23.2 (± 27.9) 15.8 (± 28.6) 14.9
+GPT-5.1 25.5 (± 30.1) 22.3 (± 29.6) 16.5 (± 27.7) 6.9 (± 30.0) 15.6 (± 28.9) 18.1 (± 29.8) 20.4 (± 25.2) 17.9
+CWLP
+DeepSeek-R1 17.8 (± 21.4) 18.6 (± 22.4) 25.2 (± 26.7) 36.3 (± 26.6) 34.1 (± 34.7) 33.8 (± 29.9) 32.5 (± 30.5) 28.3
+Gemini 3 Pro 43.8 (± 20.7) 49.4 (± 22.3) 68.8 (± 28.6) 76.3 (± 23.8) 64.8 (± 23.0) 35.2 (± 39.3) 30.1 (± 38.9) 52.6
+GPT-5.1 35.9 (± 20.6) 41.3 (± 22.2) 64.7 (± 28.6) 73.7 (± 23.7) 57.5 (± 23.0) 31.9 (± 39.2) 18.3 (± 38.8) 46.2
+JSSP
+DeepSeek-R1 41.7 (± 18.5) 38.2 (± 19.6) 27.5 (± 22.8) 37.5 (± 25.6) 28.9 (± 24.1) 39.8 (± 22.7) 41.5 (± 20.7) 36.4
+Gemini 3 Pro 64.1 (± 9.9) 63.7 (± 10.7) 63.3 (± 14.4) 61.8 (± 16.6) 63.2 (± 16.5) 59.4 (± 21.2) 59.2 (± 20.6) 62.1
+GPT-5.1 49.0 (± 14.8) 46.5 (± 16.0) 39.2 (± 19.5) 38.0 (± 23.0) 37.4 (± 24.6) 42.8 (± 23.8) 56.7 (± 20.3) 44.2
+PDPTW
+DeepSeek-R1 0.2 (± 4.8) -0.6 (± 5.3) 5.4 (± 9.2) 12.8 (± 14.9) 17.1 (± 19.6) 18.3 (± 21.5) 24.0 (± 19.9) 11.0
+Gemini 3 Pro 46.9 (± 32.4) 47.5 (± 32.1) 54.3 (± 29.2) 62.6 (± 28.6) 55.8 (± 35.1) 64.2 (± 31.2) 70.7 (± 29.4) 57.4
+GPT-5.1 7.5 (± 5.2) 8.2 (± 5.6) 9.7 (± 15.7) 12.9 (± 16.8) 14.3 (± 21.9) 18.4 (± 17.2) 27.8 (± 25.5) 14.1
+IMO6
+DeepSeek-R1 12.2 (± 13.0) 14.3 (± 14.9) 23.7 (± 20.7) 26.4 (± 19.6) 31.0 (± 18.7) 42.0 (± 14.8) 53.6 (± 11.1) 29.0
+Gemini 3 Pro 13.6 (± 11.2) 15.7 (± 13.5) 24.6 (± 18.4) 25.0 (± 21.4) 28.9 (± 23.0) 24.3 (± 26.8) 19.7 (± 27.8) 21.7
+GPT-5.1 14.0 (± 14.1) 16.6 (± 16.2) 26.9 (± 22.0) 29.5 (± 25.2) 34.1 (± 25.0) 43.6 (± 20.8) 53.3 (± 17.8) 31.1
+SHUC
+DeepSeek-R1 44.8 (± 37.9) 43.9 (± 38.3) 27.3 (± 37.0) 18.3 (± 31.8) 9.7 (± 29.4) 7.6 (± 28.7) 6.2 (± 27.6) 22.5
+Gemini 3 Pro 51.2 (± 35.1) 50.6 (± 34.8) 32.2 (± 37.7) 6.3 (± 29.4) 3.7 (± 24.9) 2.6 (± 24.2) 4.3 (± 25.0) 21.6
+GPT-5.1 34.2 (± 36.8) 34.8 (± 37.6) 25.2 (± 35.7) 6.9 (± 29.6) 4.0 (± 26.4) 6.0 (± 24.4) 7.0 (± 24.4) 16.9
+Appendix E also reports trajectory checks for representative instances. Appendix E.9 (Fig. 8) compares four
+TSPLIB instances under the same 2000 s limit, and the augmented gap curve is below the baseline curve for
+most of the horizon in all four panels. Appendix E.10 (Fig. 9) uses the same four instances and shows higher
+best-bound curves for the augmented model. Appendix E.11 (Fig. 10) reports roughly 75−95% lower PDI
+for the augmented model on those instances. Appendix E.12 (Fig. 11) shows four MCND instances where
+the selected acceleration inequality family slightly increases the gap, illustrating that the added inequalities
+can negatively impact some individual cases.
+As an additional control for prior exposure, we created the unpublished Reconﬁgurable Network Topology
+Design (RNTD) problem. The SAGE agents received only a Pyomo formulation with generic graph, node,
+link, and commodity terms, without the problem name or application description. Appendix F.8 gives the
+formulation, selected family, generator, and data split. Appendix E.5 gives the anonymized prompt and full
+results. Tables 15 and 16 in Appendix E.5 show positive mean gap improvement at six of seven checkpoints,
+including 23± 19% at 2000 s, and a mean SGM speedup of 3.3×.
+5.3 Time to Target Optimality Gap
+To complement the checkpoint gap analysis (Section 5.2), we measure how much SAGE shortens the time
+to reach target optimality gaps g∈{ 10−5, 10−4, 10−3, 10−2, 10−1} on the unseen test sets. For each instance
+and method (baseline vs. augmented), we compute the time to reach gap t(g) by linearly interpolating the
+solver trace. If a run never reaches the target gap, we assign a penalized time t(g) = 2 Tmax. We aggregate
+using the shifted geometric mean (SGM, with shift s=1):
+SGM(t) =
+( ∏
+i∈Ig
+(ti + s)
+)1/|Ig| − s,
+where Ig is the set of instances for which at least one method reaches g. Table 3 reports
+SGM(tref )/SGM(taug) and solved counts (B/A). In Table 3, SGM(tref )/SGM(taug) > 1 for all problems
+at g∈{ 10−5, 10−4, 10−3, 10−2}, and for six of seven problems at g = 10 −1. The row-average SGM speedup
+is largest on PDPTW ( 5.51×), followed by CWLP ( 4.02×), JSSP ( 3.33×), and TSP ( 2.87×). The largest
+single target-gap SGM speedup is 7.20× on JSSP at g = 10 −1. MCND is nearly neutral overall ( 1.01×) and
+is the only benchmark below 1 at g = 10 −1 (0.92×). For PDPTW, the baseline reaches none of the target
+10
+=====PAGE 11
+Published in Transactions on Machine Learning Research (10/2026)
+Table 3: Time to reach target gaps g: baseline vs. SAGE. B/A: instances reaching g within 2000 s (Base-
+line/SAGE). SGM: shifted geometric mean speedup ( > 1 better). A verage reports the row average over all
+target gaps.
+g = 10 −5 g = 10 −4 g = 10 −3 g = 10 −2 g = 10 −1 A verage
+Problem B/A SGM B/A SGM B/A SGM B/A SGM B/A SGM B/A SGM
+TSP 26/35 3.21 27/37 3.13 27/37 3.16 31/44 3.00 44/47 1.83 31.0/40.0 2.87
+MCND 56/57 1.04 62/62 1.04 62/62 1.03 69/69 1.04 76/74 0.92 65.0/64.8 1.01
+CWLP 26/23 2.44 35/36 4.24 35/36 4.42 35/36 5.19 35/36 3.83 33.2/33.4 4.02
+JSSP 7/8 2.18 7/8 2.31 7/8 2.42 7/8 2.55 10/19 7.20 7.6/10.2 3.33
+PDPTW 0/5 5.18 0/5 5.18 0/5 5.19 0/5 5.25 0/20 6.77 0.0/8.0 5.51
+IMO6 7/8 1.23 7/8 1.23 7/8 1.23 7/8 1.24 7/8 1.39 7.0/8.0 1.26
+SHUC 2/2 1.47 6/6 1.28 17/17 1.26 39/39 1.25 53/54 1.34 23.4/23.6 1.32
+gaps within 2000 s (0 instances at each target), while the augmented model reaches targets on a subset of
+instances (5 instances for g≤ 10−2 and 20 at g = 10 −1).
+Table 3 reports deployment solve time. We separately measure discovery cost, deployment setup, and payback
+on the test sets listed in Appendix E.3. Payback uses the target g≤ 10−3 and caps solver time to target at
+Tmax.
+Table 13 in Appendix E.3 shows that the mean solver time with SAGE is lower on all six benchmarks. The
+estimated payback ranges from 238 solves on TSP to 5276 solves on MCND, and the mean added setup time
+is below 1 second on ﬁve of the six benchmarks and 10.55 seconds on IMO6.
+Table 17 in Appendix E.6 reports model sizes before solver presolve and LP relaxation results for the selected
+families. Only JSSP and SHUC introduce auxiliary variables. Among benchmarks with proven objectives,
+the mean per-instance gap closure is smallest on MCND (2.81%, mean LP gap 25.45% to 24.62%) and largest
+on CWLP (98.59%, mean LP gap 24.93% to 0.38%).
+5.4 Post-hoc Screening Against Proven Optimal Solutions
+This check applies to the same selected families evaluated in Sections 5.2 and 5.3. SAGE screens candidate
+acceleration inequality families using the small admissibility set Dadm during development (Section 4). In
+the default setting, this admissibility set has only two instances. After selecting an acceleration inequality
+family, we run an additional oﬄine check on the held-out test sets to answer the following question: Does the
+selected SAGE acceleration inequality family ever exclude a proven optimal solution that we can otherwise
+compute? This post-hoc check is not an extra step required by SAGE at deployment time. For each test
+instance in every benchmark, we run the baseline MILP for 48 h and record the instances where the solver
+proves optimality. Across the full test sets, proven optima are obtained for CWLP at the rate of 36/36.
+Similarly, the rates are 58/80 for JSSP, 77/81 for MCND, 54/54 for TSP, 9/34 for IMO6, and 53/56 for
+SHUC. For each such instance, we ﬁx the original decision variables to the proven optimal solution, append
+the selected SAGE acceleration inequality family, and solve only for any auxiliary variables introduced by
+the family to test feasibility. In all cases, the feasibility check succeeds. We ﬁnd no case in which the selected
+SAGE acceleration inequality family excludes a proven optimal solution in our test set. For PDPTW, none
+of the 48 h baseline runs proves optimality (0/165), so the above check was not possible. We therefore report
+the following bound consistency results: using the 2000 s augmented run from Table 2, (i) the 2000 s lower
+bound does not exceed the 48 h upper bound and (ii) the 48 h lower bound does not exceed the 2000 s upper
+bound. This condition holds for PDPTW at the rate of 165/165. Across the instances for which this check
+is possible, we detect zero exclusions of the proven optimum. This test set result provides empirical evidence
+of optimality preservation for the selected families on the evaluated instances.
+Appendix E.2 reports a related held-out LP separation check. For each test instance, we ﬁx the original
+variables to the baseline LP optimum, append the selected acceleration inequality family, and solve only for
+auxiliary variables. Table 12 in Appendix E.2 shows 100.0% LP optimum separation on TSP, CWLP, JSSP,
+PDPTW, and IMO6, 88.9% on MCND, and 85.7% on SHUC. This test complements the preservation check
+by measuring separation of one baseline LP optimum per test instance.
+11
+=====PAGE 12
+Published in Transactions on Machine Learning Research (10/2026)
+5.5 Comparison with Static Literature Augmentation
+For the four benchmarks with well-known published valid inequalities, we also compare against adding these
+inequalities up front, using the same time-to-target protocol as in Table 3. The detailed formulas and sources
+are given in Appendix E.7. A veraged over the ﬁve target gaps g∈{ 10−5, 10−4, 10−3, 10−2, 10−1}, the static
+literature valid inequalities achieve mean SGM speedups of 3.01×, 1.91×, 1.01×, and 2.57× on CWLP, JSSP,
+MCND, and TSP, respectively. On the same benchmarks, the SAGE families achieve 4.02×, 3.33×, 1.01×,
+and 2.87×. Thus, relative to these instantiated static literature valid inequalities, SAGE is higher by about
+34% on CWLP, 74% on JSSP, and 12% on TSP, while MCND is unchanged. The main gains come from
+CWLP and JSSP. TSP shows a smaller gain, and MCND shows no measurable diﬀerence.
+5.6 Complementarity with Learned Solver-Layer Policies
+To check how SAGE interacts with two learned runtime methods that act inside branch-and-bound, we run
+a factorial CWLP experiment on the held-out 36-instance OR-Library benchmark, with one random seed
+and a 2000 s SCIP 10.0 time limit. The two methods are the Turner et al. adaptive cut selector Turner et al.
+(2023) and the Lawless et al. cold-start LLM separator conﬁguration Lawless et al. (2025). The factorial
+crosses SAGE (oﬀ / on, at the model layer) with the ML policy (oﬀ / Turner / Lawless-LLM(0) / Lawless-
+LLM(5), at the solver layer). Turner changes SCIP’s cut selector by scoring generated cuts before SCIP
+decides which cuts to keep. The Turner column uses the reinforcement learning setup from Turner et al.
+(2023). Lawless changes SCIP’s separator settings before solving by choosing conﬁgurations generated by
+GPT-4o. The Lawless columns use 100 separator conﬁgurations generated by GPT-4o, clustered into LLM(0)
+(largest-cluster medoid) and LLM(5) (k-medoids with k=5), exactly as in Lawless et al. (2025). We report
+the shifted-geometric-mean speedup (SGM, shift s=1, PAR-2 penalty at 2000 s) deﬁned in Section 5.3 at the
+ﬁve target gaps used in Table 3, and the row-averaged speedup. The reference cell is plain SCIP defaults
+without SAGE.
+Table 4: CWLP factorial with learned runtime policies, held-out OR-Library test set, SCIP 10.0,
+2000 s time limit, single seed. The reported value is the average over the ﬁve target gaps g ∈
+{10−5, 10−4, 10−3, 10−2, 10−1} of the time-to-target SGM speedup vs the reference cell ( SAGE oﬀ, plain
+SCIP defaults), following the protocol of Table 3. Values > 1 are faster. The reference cell is 1.00 × by
+construction.
+SAGE Solver-layer policy A vg SGM speedup
+Oﬀ SCIP default 1.00
+Oﬀ Turner et al. 2.12
+Oﬀ Lawless et al. LLM(0) 2.58
+Oﬀ Lawless et al. LLM(5) 2.60
+On SCIP default 3.13
+On Turner et al. 3.45
+On Lawless et al. LLM(0) 3.51
+On Lawless et al. LLM(5) 3.43
+In Table 4, each learned solver-layer method gives a speedup on its own, 2.12 × for Turner, 2.58× for Lawless
+et al. LLM(0), and 2.60 × for Lawless et al. LLM(5), while SAGE alone reaches 3.13×. Combining SAGE
+with a learned solver-layer policy gives 3.45 × with Turner, 3.51× with Lawless et al. LLM(0), and 3.43 ×
+with Lawless et al. LLM(5), so all three combined cells are above SAGE alone and above the matching cells
+without SAGE.
+12
+=====PAGE 13
+Published in Transactions on Machine Learning Research (10/2026)
+Table 5: Gemini 3 Pro selected acceleration inequality family: test stabilized ¯∆g (%) with Gurobi vs. HiGHS.
+Mean±σ is reported at each checkpoint. A verage reports the row average of checkpoint means.
+Problem Solver 5 s 10 s 50 s 150 s 300 s 1000 s 2000 s A verage
+TSP Gurobi 13.1 (± 27.5) 15.0 (± 27.9) 22.6 (± 31.3) 34.2 (± 30.3) 27.6 (± 33.1) 26.4 (± 33.3) 37.0 (± 31.1) 25.1 HiGHS 2.5 (± 13.8) 2.9 (± 14.9) 11.3 (± 23.3) 18.6 (± 26.5) 18.5 (± 27.2) 21.4 (± 28.1) 21.9 (± 28.7) 13.9
+MCND Gurobi 6.8 (± 17.7) 8.2 (± 19.9) 15.1 (± 25.8) 17.4 (± 26.9) 17.8 (± 25.5) 23.2 (± 27.9) 15.8 (± 28.6) 14.9 HiGHS 6.0 (± 15.1) 7.0 (± 16.9) 6.6 (± 22.5) 1.4 (± 27.7) 5.5 (± 28.4) 2.0 (± 29.3) 5.7 (± 29.0) 4.9
+CWLP Gurobi 43.8 (± 20.7) 49.4 (± 22.3) 68.8 (± 28.6) 76.3 (± 23.8) 64.8 (± 23.0) 35.2 (± 39.3) 30.1 (± 38.9) 52.6 HiGHS 25.5 (± 24.6) 25.3 (± 24.6) 23.0 (± 24.8) 28.1 (± 29.8) 39.1 (± 36.2) 62.3 (± 32.3) 64.2 (± 31.9) 38.2
+JSSP Gurobi 64.1 (± 9.9) 63.7 (± 10.7) 63.3 (± 14.4) 61.8 (± 16.6) 63.2 (± 16.5) 59.4 (± 21.2) 59.2 (± 20.6) 62.1 HiGHS 12.8 (± 16.5) 14.1 (± 17.2) 18.9 (± 22.4) 24.6 (± 24.8) 21.0 (± 25.6) 26.7 (± 26.5) 27.3 (± 27.5) 20.8
+PDPTW Gurobi 46.9 (± 32.4) 47.5 (± 32.1) 54.3 (± 29.2) 62.6 (± 28.6) 55.8 (± 35.1) 64.2 (± 31.2) 70.7 (± 29.4) 57.4 HiGHS -0.4 (± 4.1) 0.3 (± 4.6) 3.1 (± 12.8) 7.5 (± 21.7) 4.2 (± 26.9) 9.8 (± 28.4) 12.3 (± 21.9) 5.3
+IMO6 Gurobi 13.6 (± 11.2) 15.7 (± 13.5) 24.6 (± 18.4) 25.0 (± 21.4) 28.9 (± 23.0) 24.3 (± 26.8) 19.7 (± 27.8) 21.7 HiGHS 5.3 (± 12.9) 6.7 (± 14.5) 12.1 (± 19.4) 14.8 (± 21.3) 16.0 (± 22.7) 13.5 (± 25.6) 18.6 (± 24.8) 12.4
+SHUC Gurobi 51.2 (± 35.1) 50.6 (± 34.8) 32.2 (± 37.7) 6.3 (± 29.4) 3.7 (± 24.9) 2.6 (± 24.2) 4.3 (± 25.0) 21.6 HiGHS 1.9 (± 9.2) 1.8 (± 9.7) -2.7 (± 11.4) 3.8 (± 23.0) 17.8 (± 32.3) 24.3 (± 28.2) 20.4 (± 30.5) 9.6
+5.7 Solver Robustness Ablations
+5.7.1 Transfer Across Solvers
+This cross-solver robustness ablation checks whether the observed gains are speciﬁc to a particular solver
+or persist under a diﬀerent branch-and-bound implementation and default cut setting. We keep the same
+acceleration inequality families discovered with Gemini 3 Pro and solve the test instances with two diﬀerent
+MILP solvers, Gurobi and HiGHS. Each solver uses its default settings unless speciﬁed in Section 5.1, and
+each run uses the same 2000 s time limit and seven checkpoints as Table 2. Table 5 reports ¯∆g under each
+solver.
+In Table 5, the HiGHS 2000 s means are positive for 7/7 benchmarks and range from 5.7% (MCND) to 64.2%
+(CWLP). At 2000 s, HiGHS is larger than Gurobi on CWLP (64.2% vs. 30.1%) and SHUC (20.4% vs. 4.3%)
+and smaller than Gurobi on the other 5 benchmarks.
+5.7.2 Interaction with Internal Solver Cuts
+This check shows how much of SAGE’s beneﬁt remains when the solver’s own cutting-plane machinery
+is reduced and whether the interaction between instantiated acceleration inequality families and solver-
+generated cuts changes the net improvement. We solve the test instances under Gurobi with internal cuts
+disabled and under default internal cuts, using the same test sets, 2000 s limit, and seven checkpoints as
+Table 2. Table 6 reports ¯∆g under each cut setting.
+In Table 6, disabling internal cuts gives larger ¯∆g than default settings for TSP and CWLP at 7/7 checkpoints.
+MCND and PDPTW have smaller values with internal cuts disabled at 7/7 checkpoints. At 2000 s, the no-
+internal-cuts and default values are 62.0% vs. 37.0% for TSP, 93.9% vs. 30.1% for CWLP, 5.1% vs. 15.8%
+for MCND, and 34.2% vs. 70.7% for PDPTW. JSSP, IMO6, and SHUC have mixed ordering across the 7
+checkpoints. The row averages remain positive for all seven benchmarks in both settings: with cuts disabled
+they range from 3.4% (MCND) to 81.2% (CWLP), and with default cuts they range from 14.9% (MCND) to
+62.1% (JSSP). This ablation tests cut-policy interaction: SAGE acceleration inequality families are added
+before Gurobi is called, while the cut parameter changes solver-generated cuts inside Gurobi.
+5.7.3 Sensitivity to the Continuous Solution Method
+We also test sensitivity to the continuous solution method. We ﬁx the selected TSP family and compare
+the automatic method with the deterministic concurrent method on TSP test instances under a limit of 300
+seconds. Appendix E.4 gives the protocol.
+13
+=====PAGE 14
+Published in Transactions on Machine Learning Research (10/2026)
+Table 6: Gemini 3 Pro selected acceleration inequality family: test stabilized ¯∆g (%) with Gurobi internal
+cuts disabled vs. default. Mean ±σ is reported at each checkpoint. A verage reports the row average of
+checkpoint means.
+Problem Solver 5 s 10 s 50 s 150 s 300 s 1000 s 2000 s A verage
+TSP No internal cuts 34.9 (± 25.1) 37.8 (± 25.5) 53.5 (± 23.3) 61.6 (± 18.1) 64.2 (± 16.5) 64.0 (± 16.8) 62.0 (± 20.2) 54.0 Default internal cuts 13.1 (± 27.5) 15.0 (± 27.9) 22.6 (± 31.3) 34.2 (± 30.3) 27.6 (± 33.1) 26.4 (± 33.3) 37.0 (± 31.1) 25.1
+MCND No internal cuts 2.5 (± 10.0) 2.9 (± 11.0) 4.3 (± 14.8) 3.4 (± 15.3) 1.7 (± 17.1) 4.1 (± 17.2) 5.1 (± 13.6) 3.4 Default internal cuts 6.8 (± 17.7) 8.2 (± 19.9) 15.1 (± 25.8) 17.4 (± 26.9) 17.8 (± 25.5) 23.2 (± 27.9) 15.8 (± 28.6) 14.9
+CWLP No internal cuts 53.6 (± 19.8) 60.6 (± 21.2) 86.7 (± 19.8) 84.3 (± 28.3) 94.8 (± 8.8) 94.5 (± 8.9) 93.9 (± 9.2) 81.2 Default internal cuts 43.8 (± 20.7) 49.4 (± 22.3) 68.8 (± 28.6) 76.3 (± 23.8) 64.8 (± 23.0) 35.2 (± 39.3) 30.1 (± 38.9) 52.6
+JSSP No internal cuts 64.2 (± 14.6) 62.8 (± 16.1) 67.5 (± 20.3) 71.7 (± 23.5) 64.9 (± 22.7) 69.3 (± 23.9) 63.6 (± 19.7) 66.3 Default internal cuts 64.1 (± 9.9) 63.7 (± 10.7) 63.3 (± 14.4) 61.8 (± 16.6) 63.2 (± 16.5) 59.4 (± 21.2) 59.2 (± 20.6) 62.1
+PDPTW No internal cuts 1.7 (± 6.2) 2.9 (± 6.9) 12.4 (± 16.8) 22.5 (± 28.9) 16.0 (± 33.5) 27.8 (± 34.2) 34.2 (± 32.6) 16.8 Default internal cuts 46.9 (± 32.4) 47.5 (± 32.1) 54.3 (± 29.2) 62.6 (± 28.6) 55.8 (± 35.1) 64.2 (± 31.2) 70.7 (± 29.4) 57.4
+IMO6 No internal cuts 11.9 (± 13.6) 13.7 (± 15.1) 21.5 (± 19.2) 23.4 (± 21.1) 26.8 (± 22.5) 20.6 (± 26.3) 24.3 (± 26.7) 20.3 Default internal cuts 13.6 (± 11.2) 15.7 (± 13.5) 24.6 (± 18.4) 25.0 (± 21.4) 28.9 (± 23.0) 24.3 (± 26.8) 19.7 (± 27.8) 21.7
+SHUC No internal cuts 44.3 (± 36.8) 41.6 (± 35.9) 28.2 (± 38.4) 10.7 (± 31.6) 8.2 (± 28.9) 4.6 (± 27.8) 3.4 (± 26.9) 20.1 Default internal cuts 51.2 (± 35.1) 50.6 (± 34.8) 32.2 (± 37.7) 6.3 (± 29.4) 3.7 (± 24.9) 2.6 (± 24.2) 4.3 (± 25.0) 21.6
+Table 7: JSSP: test stabilized ¯∆g ±σ (%) at the 2000 s checkpoint for the selected SAGE acceleration
+inequality family vs. (|Dadm|,|Dimp|).
+(|Dadm|,|Dimp|) (2 , 10) (5 , 10) (10 , 10) (10 , 5) (10 , 2)
+¯∆g ±σ (%) 37.3 ± 22.0 37.3 ± 22.0 40.4 ± 22.3 37.3 ± 22.0 7.1 ± 16.4
+Table 14 in Appendix E.4 shows positive mean improvement under both methods. The mean is 34.3% with
+the automatic method and 27.6% with the deterministic concurrent method.
+5.8 Sensitivity to |Dimp| and|Dadm|
+We vary|Dimp| and|Dadm| on the JSSP benchmark using DeepSeek-R1. We run two experiments. In the
+ﬁrst, we ﬁx |Dimp|=10 and vary |Dadm| over{2, 5, 10}. In the second, we hold |Dadm|=10 constant and
+vary|Dimp| over the same three values. These settings are independent SAGE reruns. In every setting, the
+selected acceleration inequality family found by SAGE is evaluated on the held-out test set Dt. Following
+the post-hoc screening protocol in Section 5.4, we also check whether any generated acceleration inequality
+family excludes a proven-optimal JSSP solution. Table 7 reports test-set ¯∆g ±σ at the 2000 s checkpoint
+for the selected acceleration inequality family found under each setting. In Table 7, the |Dadm| = 2 and
+|Dadm| = 5 conﬁgurations both report 37.3%, while |Dadm| = 10 reports 40.4%. With |Dadm| = 10 , the
+reported means for|Dimp| = 2, 5, 10 are 7.1%, 37.3%, and 40.4%, respectively. The three settings that report
+37.3% are separate SAGE runs that reach the same test set mean. The default admissibility set is within 3.1
+percentage points of the largest setting. None of the generated families under these conﬁgurations excludes
+a proven-optimal JSSP solution in the post-hoc check. All setups pass on 58/58 test instances.
+5.9 Evolutionary Diagnostics
+We report four diagnostics of the evolutionary process: (i) agent outcome statistics (Table 8), (ii) a traced
+ancestry graph for a JSSP evolutionary trajectory (Fig. 4 in Appendix C.1), (iii) population score trajectories
+over generations (Fig. 5 in Appendix C.2), and (iv) a token matched initializer control on JSSP (Table 9, with
+the protocol and deployment results in Appendix C.3). For each generated oﬀspring, we compute the relative
+improvement rate ∆imp = ( simp,child− simp,parent)/simp,parent, where simp,parent is the parent inequality
+impact score (a single value for mutation and the mean of two parents for crossover). For the initializer
+agent, the reference value is the neutral inequality impact score 10 that corresponds to no added acceleration
+inequality family. Table 8 reports ﬁve statistics collected over the full run on all benchmarks: code generation
+14
+=====PAGE 15
+Published in Transactions on Machine Learning Research (10/2026)
+Table 8: SAGE agent outcomes across three LLMs: code fail, OSS fail, LP-separation rejection, success rate,
+and mean inequality-impact-score gain ¯∆imp± σ (%) (successful oﬀspring only).
+Agent LLM Code Fail.% OSS Fail.% Not Useful % Success Rate % ¯∆imp ± σ (%)
+Initializer
+Main
+DeepSeek 38.1 11.1 25.4 25.4 12.3 ± 20.8
+Gemini 3 Pro 5.6 12.8 45.1 36.5 14.8 ± 19.9
+GPT-5.1 8.9 14.7 46.8 29.6 10.4 ± 19.5
+Mutation
+General
+DeepSeek 17.6 13.2 2.9 66.2 15.5 ± 16.6
+Gemini 3 Pro 3.1 10.2 3.4 83.3 17.2 ± 15.1
+GPT-5.1 5.6 12.5 4.8 77.1 12.8 ± 15.3
+Exploratory
+DeepSeek 3.3 13.1 1.6 82.0 17.9 ± 20.8
+Gemini 3 Pro 1.4 11.3 2.1 85.2 19.1 ± 18.0
+GPT-5.1 3.2 13.4 2.9 80.5 13.7 ± 17.4
+Lifted
+DeepSeek 12.2 18.4 6.1 63.3 8.1 ± 13.1
+Gemini 3 Pro 2.8 15.9 6.4 74.9 9.6 ± 12.1
+GPT-5.1 4.9 18.2 8.1 68.8 6.1 ± 11.7
+Crossover
+Hybrid
+DeepSeek 13.2 15.1 3.8 67.9 3.0 ± 11.0
+Gemini 3 Pro 2.5 12.2 4.6 80.7 4.4 ± 10.2
+GPT-5.1 4.3 14.8 6.1 74.8 2.0 ± 9.5
+Intersect
+DeepSeek 7.7 9.9 5.5 76.9 1.3 ± 8.7
+Gemini 3 Pro 1.9 8.7 5.0 84.4 2.2 ± 8.1
+GPT-5.1 3.7 10.9 6.4 79.0 1.1 ± 7.8
+Complement
+DeepSeek 4.2 14.3 6.7 74.8 14.7 ± 13.9
+Gemini 3 Pro 1.6 11.4 6.9 80.1 15.6 ± 12.7
+GPT-5.1 3.3 14.2 8.1 74.4 10.8 ± 13.6
+Min Violation
+DeepSeek 10.1 11.9 9.2 68.8 -0.4 ± 9.6
+Gemini 3 Pro 2.3 10.8 9.1 77.8 0.6 ± 8.7
+GPT-5.1 4.1 13.6 10.2 72.1 -0.3 ± 9.0
+failures, OSS failures, LP-separation rejections, overall success rate, and the average improvement ¯∆imp of
+successful oﬀspring. The mutation and crossover agents have higher acceptance rates than the initializer
+agent across the three LLMs. The table reports mean inequality-impact-score gains ¯∆imp that include both
+negative and positive values. The initializer acceptance rates are 25.4%, 36.5%, and 29.6% for DeepSeek-R1,
+Gemini 3 Pro, and GPT-5.1, respectively. Across mutation agents, acceptance rates range from 63.3% to
+85.2%. Across crossover agents, they range from 67.9% to 84.4%. The reported ¯∆imp values range from
+−0.4% to 19.1%.
+Second, we trace one JSSP evolutionary trajectory. This trajectory is included to illustrate how SAGE
+mutates and recombines candidates. Fig. 4 in Appendix C.1 shows the traced graph for this trajectory.
+Third, we plot score curves at the population level. For each of the seven problems, we tracked the maximum
+and mean inequality impact scores of the population over 20 generations. Fig. 5 in Appendix C.2 shows the
+trajectories of these values across generations. For each benchmark, the best score curve increases over the
+20 generations. The initial population is the output of the initializer agent before any crossover or mutation.
+On every benchmark, the best score of the ﬁnal generation exceeds the best score of the initial population,
+for example from 9.4 to 13.7 on TSP and from 10.2 to 14.7 on PDPTW (Appendix C.2).
+Fourth, we compare ﬁve generations of SAGE with iterative initialization and feedback in one paired JSSP
+experiment using DeepSeek-R1. Both runs share the initial population and development data, with token
+usage after initialization matched to within 0.51%. Table 9 reports the best impact score and the correspond-
+ing mean development gap reduction, − ¯d = ln(simp/10). The mean development gap reduction is 64.6% for
+SAGE and 56.5% for the control. Appendix C.3 gives the protocol.
+15
+=====PAGE 16
+Published in Transactions on Machine Learning Research (10/2026)
+Table 9: JSSP with DeepSeek-R1: development comparison between ﬁve generations of SAGE and the
+initializer with feedback, with token usage matched to within 0.51% after the shared initialization. Ap-
+pendix C.3 gives the protocol and the deployment results.
+Run Tokens Best simp − ¯d (%)
+SAGE (5 generations) 761,451 19.07 64.6
+Initializer with feedback 765,308 17.60 56.5
+Table 9 shows that SAGE raises the best score from 17.60 to 19.07 (a mean development gap reduction
+of 64.6%), while the control remains at 17.60 (56.5%). The selected SAGE family gives a strictly larger
+makespan bound on 38 test instances and an equal bound on the remaining 42, and both families preserve
+all stored proven optimal solutions (Appendix C.3).
+Appendix C.3, Table 11, evaluates both selected families against the same baseline on the JSSP test set.
+SAGE has a higher mean relative gap improvement at all seven checkpoints, with paired diﬀerences of 15.9
+percentage points at 5 s and 9.6 at 10 s. The pointwise 95% conﬁdence intervals are above zero at 5, 10, 50,
+and 300 s.
+5.10 Case Study: Post-Hoc Interpretation of the SHUC Acceleration Inequality
+We next examine the selected acceleration inequality family for the sub-hour unit commitment problem
+(SHUC). This is a post-hoc case study for one acceleration inequality family found by SAGE, not a general
+validity guarantee for the method. SAGE selected this family through the empirical screens in Section 4.
+The proof below was written after selection to interpret this particular output. The selected family com-
+bines several familiar unit-commitment strengthening motifs into one aggregate reachability inequality. The
+SHUC benchmark follows a reference unit commitment formulation with piecewise production costs, startup
+categories, ramping limits, minimum up/down times, demand balance, and spinning reserve requirements
+(Knueven et al. , 2020; Power Grid Lib , 2019). For the SHUC formulation in Appendix F.7, this selected
+acceleration inequality family can be proved valid as a valid inequality family.
+To avoid overloading notation, we denote the auxiliary capacity variable from Appendix F.7 by ¯Pg,t. Deﬁne
+Dnet t := Lt− ∑
+w∈W
+pw w,t + Rt, a SU g := max{P max g − SUg, 0}, a SD g := max{P max g − SDg, 0}.
+The selected SHUC acceleration inequality family is:
+bg,t≤ vg,t, ∀g∈ G, t < T, (3)
+bg,t≤ wg,t+1, ∀g∈ G, t < T,
+bg,t≥ vg,t + wg,t+1− 1, ∀g∈ G, t < T,
+¯Pg,t≤ P max g ug,t− aSU g vg,t, ∀g∈ G, t ∈T , (4)
+¯Pg,t≤ P max g ug,t− aSD g wg,t+1, ∀g∈ G, t < T, (5)
+¯Pg,t≤ P max g ug,t− aSU g vg,t− aSD g wg,t+1 + min{aSU g , aSD g }bg,t, ∀g∈ G, t < T, (6)
+¯Pg,t≤ P min g ug,t + pg,t−1 + RUg + (P max g − P min g )(1− ug,t−1), ∀g∈ G, t ≥ 2, (7)
+¯Pg,t≤ P min g ug,t + (P max g − P min g )ug,t−1− aSU g vg,t−1 + RUg, ∀g∈ G, t ≥ 2, (8)
+¯Pg,t≤ P min g ug,t + (P max g − P min g )ug,t−1− aSD g wg,t + RUg, ∀g∈ G, t ≥ 2, (9)
+Dnet t ≤ ∑
+g∈G
+¯Pg,t, ∀t∈T . (10)
+The analogous t = 1 ramp-reachability rows use the initial status and initial output ﬁelds from the instance
+data, as in the base SHUC model.
+16
+=====PAGE 17
+Published in Transactions on Machine Learning Research (10/2026)
+Proposition 5.1 (Post-hoc validity of the selected SHUC acceleration inequality family by SAGE). For
+the SHUC formulation in Appendix F.7, the acceleration inequality family from Eq. (3) through Eq. (10) is
+valid as an extended inequality family: every feasible integer solution of the original SHUC formulation can
+be extended with auxiliary variables ( ¯P , b) so that all added constraints are satisﬁed.
+Proof. Take any feasible integer solution of the original SHUC formulation. Set
+ˆPg,t := P min g ug,t + pg,t + rg,t, ˆbg,t := vg,twg,t+1.
+Because vg,t and wg,t+1 are binary, the three inequalities in Eq. ( 3) are the standard linearization of the
+product bg,t = vg,twg,t+1.
+The base SHUC startup and shutdown capacity rows give
+pg,t + rg,t≤ (P max g − P min g )ug,t− aSU g vg,t
+and
+pg,t + rg,t≤ (P max g − P min g )ug,t− aSD g wg,t+1.
+Adding P min g ug,t to both inequalities proves Eq. ( 4) and Eq. ( 5) for ¯Pg,t = ˆPg,t. Moreover, when vg,t, wg,t+1∈
+{0, 1} and bg,t = vg,twg,t+1, the right-hand side of Eq. ( 6) equals the tighter of the two startup/shutdown
+upper envelopes. Hence Eq. ( 6) is also satisﬁed.
+For the ramp-reachability rows, the base ramp-up constraint gives
+pg,t + rg,t− pg,t−1≤ RUg.
+Adding P min g ug,t yields
+ˆPg,t≤ P min g ug,t + pg,t−1 + RUg,
+which implies Eq. ( 7). Combining the same ramp-up constraint with the startup-capacity upper bound at
+time t− 1 gives
+pg,t−1≤ (P max g − P min g )ug,t−1− aSU g vg,t−1,
+and therefore Eq. ( 8). Combining the ramp-up constraint with the shutdown-capacity upper bound at time
+t− 1 gives
+pg,t−1≤ (P max g − P min g )ug,t−1− aSD g wg,t,
+and therefore Eq. ( 9).
+Finally, the base power-balance constraint gives
+Lt−
+∑
+w∈W
+pw w,t = ∑
+g∈G
+(
+P min g ug,t + pg,t ) ,
+and the base reserve constraint gives
+Rt≤
+∑
+g∈G
+rg,t.
+Adding these two relations gives
+Dnet t = Lt− ∑
+w∈W
+pw w,t + Rt≤ ∑
+g∈G
+(
+P min g ug,t + pg,t + rg,t ) = ∑
+g∈G
+ˆPg,t,
+which proves Eq. ( 10). Thus every feasible integer solution of the base SHUC model admits feasible auxiliary
+variables, so the added family is valid in the extended space.
+17
+=====PAGE 18
+Published in Transactions on Machine Learning Research (10/2026)
+Table 10: Post-hoc source attribution for the selected SHUC acceleration inequality family. The table
+categorizes each component by whether it has a direct literature analog, follows from the base formulation,
+or appears to be a formulation-speciﬁc aggregate component.
+Component What it does Source status
+Binary product rows
+Eq. ( 3)
+Encode bg,t = vg,twg,t+1, i.e., whether
+unit g starts at t and shuts down at t+1.
+Standard MILP linearization of binary products,
+not SHUC-speciﬁc ( Glover, 1975).
+Startup/shutdown
+capacity envelopes
+Eq. ( 4) to Eq. ( 5)
+Upper-bound reachable thermal capac-
+ity when the unit is starting up or shut-
+ting down.
+Closely aligned with startup/shutdown ramp-
+ing and strong UC production upper bounds
+(Morales-España et al. , 2012; Knueven et al. ,
+2020).
+Lifted adjacent
+start/shutdown enve-
+lope Eq. ( 6)
+Combines the two derating envelopes
+and uses bg,t to avoid double-counting
+when both transition indicators are ac-
+tive.
+Built from known lifting and UC derating ideas.
+Closest references are strong UC upper-bound
+and ramping formulations ( Knueven et al. , 2018;
+2020).
+Ramp-reachability
+envelopes Eq. ( 7) to
+Eq. ( 9)
+Bound what unit g can contribute at
+t using previous dispatch/status and
+ramp-up capability.
+Related to ramping polytope and ramp-aware UC
+formulations ( Knueven et al. , 2018; 2020).
+Aggregate auxiliary
+reachability inequal-
+ity Eq. ( 10)
+Projects unit-level startup, shutdown,
+and ramp-reachability envelopes into
+one system-level condition: net load
+plus reserve must be coverable by reach-
+able thermal capacity.
+In our targeted review, close analogs exist for
+the unit-level components in the UC formulation
+literature, including reserve and ramp-capability
+formulations ( Morales-España et al. , 2013; 2015),
+but we did not identify Eq. ( 10) as this same
+static aggregate inequality added before solving
+for the SHUC formulation in Appendix F.7.
+Table 10 shows that this selected SHUC acceleration inequality family is interpretable at two levels. At the
+unit level, SAGE recovers known modeling motifs: binary-product linearization, transition derating, and
+ramp-aware capacity envelopes. At the system level, it composes these motifs into the aggregate reachability
+inequality in Eq. ( 10). Our targeted review did not identify this exact static aggregate inequality for SHUC.
+Rather than adding a runtime separator or a full ramping polytope, this selected acceleration inequality
+family can be appended before the solver is called.
+6 Discussion
+Starting with RQ1, Table 2 and Appendix E.1 show that SAGE can reduce the optimality gap at successive
+checkpoints under the same time budgets. The trajectory checks in Appendix E.9, Appendix E.10, and
+Appendix E.11 show the same eﬀect for individual instances. Table 2 also indicates that diﬀerent LLMs
+lead to diﬀerent families and levels of improvement. Therefore, choosing an LLM among the multiple LLM
+options of SAGE matters. The main LLM result is that Gemini 3 Pro has been generally the strongest
+backend in our experiments. This pattern justiﬁes our use of the Gemini 3 Pro acceleration inequality family
+as the selected alternative in the rest of the experiments. Complementing this, Table 3 shows faster times
+to reach target gaps across benchmarks. Table 17 in Appendix E.6 shows that the selected families tighten
+the LP relaxation on nearly every test instance, so part of the deployment gain may come from a stronger
+initial relaxation, while the amount of tightening and the added model size vary by benchmark. SAGE often
+increases the number of instances that reach the target gap within the time limit. We have also observed on
+rare occasions that SAGE acceleration inequality families may have negative impact. When a discovered
+acceleration inequality family fails to improve the relaxed model for a particular instance, it increases model
+size and overhead nonetheless, leading to a slight deterioration of the overall performance (Appendix E.12).
+To test robustness beyond gap improvements, we reported on four complementary experiments. First, the
+post-hoc screening against proven-optimal solutions and the held-out LP separation check in Section 5.4
+indicate a reduced chance that the observed speedups come from excluding good integer solutions. Second,
+18
+=====PAGE 19
+Published in Transactions on Machine Learning Research (10/2026)
+the cross-solver ablation in Section 5.7.1 suggests that the same discovered families can transfer beyond
+one solver. Third, the internal-cut ablation in Section 5.7.2 shows that SAGE remains useful when cut
+generation inside Gurobi changes. Fourth, the learned-policy factorial in Section 5.6 evaluates the same
+modeling claim against learned cut-selection and separator-conﬁguration policies. The learned-policy results
+are consistent with complementarity between SAGE’s model-layer augmentation and the learned solver-layer
+policies. Together, these results suggest that SAGE provides a static model augmentation at deployment after
+a separate discovery stage. This augmentation is separate from solver cut policies and learned runtime policies
+because it changes the formulation before the solver is called, while those policies act during solving. We also
+observe that the magnitude of improvement depends on the interaction between the compact formulation,
+the selected acceleration inequality family, and the solver. Mature benchmarks can still show large gains
+when the compact baseline leaves useful model structure. Finally, we focus on improving a given symbolic
+formulation without callbacks or domain-speciﬁc separation code. Accordingly, our baselines use standard
+compact formulations (Appendix F) rather than a tailored branch-and-bound method for each benchmark
+problem.
+The discovery and payback analysis in Section 5.3 separates the search cost from repeated deployment. The
+discovery stage carries the cost that is paid once per problem class, while the added cost at each deployment
+is the time to instantiate the family for one instance. SAGE needs no callback, no separation routine, and
+no change to the solver, so the augmented model enters a standard solver pipeline. The results show that
+the search cost can be amortized across repeated deployments, but the required number varies by problem
+class. The same selected families also hold across the solvers in Section 5.7.1 and the internal cut settings in
+Section 5.7.2, so one search covers more than one deployment conﬁguration. The tested distribution, solver,
+hardware, target gap, time limit, and search budget determine the estimate of payback in compute time.
+API prices determine the separate monetary search cost.
+The method sensitivity check in Section 5.7.3 shows that the selected family improves solver progress under
+both methods, with the magnitude of the gain depending on the method.
+The static literature augmentation comparison in Section 5.5 and Appendix E.7 clariﬁes how SAGE’s model-
+layer gains compare with existing expert valid inequalities. Valid inequalities can be strong under the same
+static augmentation protocol, as shown in Table 18 in Appendix E.7. The SAGE acceleration inequality
+families, however, yield even larger mean speedups than the instantiated static literature valid inequalities on
+CWLP, JSSP, and TSP. On MCND both methods are essentially equivalent. Taken together, our analysis
+suggests that SAGE performs symbolic search for useful acceleration inequality families at the modeling
+level. The selected SAGE families include both familiar forms of inequalities and more specialized algebraic
+forms. This search can recover high-value structure that expert formulations of classic problems also exploit,
+including cut-set capacity, assignment and opening links, cover logic, ordering constraints, and workload
+bounds. For TSP, the smaller margin is consistent with the literature baseline already adding lifted MTZ
+ordering rows that overlap with the selected SAGE family. For the lesser explored benchmarks, such as IMO6
+and SHUC, the same search can produce more specialized families tied to the symbolic formulation. Thus,
+SAGE is a symbolic search procedure whose empirical screening determines which acceleration inequality
+family is useful for the given compact formulation.
+The anonymized RNTD control in Appendix E.5 makes direct recall of a published formulation or its speciﬁc
+inequalities less plausible. Together, RNTD and IMO6 distinguish formulation speciﬁc exposure from general
+optimization knowledge. Their unpublished or newly formulated MILPs reduce cues for direct recall while
+leaving general optimization knowledge available to the LLM.
+Turning to RQ2, Table 7 suggests that small admissibility sets may suﬃce, while larger impact-assessment
+sets generally yield stronger families. The default admissibility set is the smallest one we tested, and on
+JSSP it still yields a family that performs close to the largest setting, so a small admissibility set is enough
+to produce a strong family. SAGE derives acceleration inequality families from underlying problem logic
+rather than patterns speciﬁc to a dataset. In our experiments, these families remain eﬀective even when the
+test distribution or size diﬀers from those used for admissibility screening and impact assessment. This is
+consistent with our choice of split: Dimp and Dadm are synthetic, while Dt is a held-out public benchmark
+set. As a practical consideration, the sizes of Dimp and Dadm create a tradeoﬀ between runtime and quality.
+19
+=====PAGE 20
+Published in Transactions on Machine Learning Research (10/2026)
+Larger impact-assessment sets tend to improve deployment performance. Larger admissibility sets can also
+help, but to a lesser extent. Both increase SAGE development runtime because each candidate family is
+tested on more instances (Section 5.8).
+For RQ3, the paired JSSP experiment in Section 5.9, Table 9, shows that evolutionary search improves on the
+initializer’s best development score at matched token usage. The bound comparison in Appendix C.3 shows
+how the evolved family strengthens the initializer’s makespan bound. The deployment results in Table 11
+show that this reﬁnement also improves solver progress, especially at early checkpoints. The acceptance
+statistics in Table 8, the ancestry trace in Fig. 4, and the score trajectories in Fig. 5 describe how the search
+develops these families.
+7 Conclusion and Future Direction
+SAGE automates acceleration inequality family generation, a step that augments a MILP model before
+solving and is typically driven by experts. Across seven MILP benchmarks, SAGE discovers reusable and
+interpretable families, ranging from expert strengthening patterns on mature benchmarks to more specialized
+families on less standard models. These families can be appended to MILPs in standard solver pipelines and
+often improve solver progress under time limits. The search runs once per problem class, and Section 5.3 re-
+ports its cost and the number of deployment solves that recover it. We expect the approach to be particularly
+useful for custom or newly formulated MILPs, where established formulation ideas may be limited.
+Two design choices deﬁne the present scope of SAGE. Empirical screening evaluates solution preservation
+and LP separation on sampled instances, while formal global guarantees require a separate proof. The current
+method instantiates acceleration inequality families before solving. Runtime separation and dynamic addition
+remain future extensions.
+This scope motivates two directions for future work: (1) The current screening relies on recorded solutions on
+a small admissibility set. Integrating automated formal proof tooling could provide theoretical guarantees
+(e.g., discovering acceleration inequality families composed of provably valid inequalities or families that
+provably preserve optimality) Yang et al. (2025). (2) SAGE currently inserts instantiated acceleration
+inequality families into the MILP model before the solution process begins. Dynamically separating and
+adding inequalities via callbacks during the solve could further improve solver performance, but requires
+generating an eﬃcient separation algorithm for each discovered family.
+Broader Impact Statement
+SAGE is a study of acceleration inequality families for MILP solving. It uses benchmark and synthetic MILP
+instances and no human subject data. By improving solver progress under ﬁxed budgets, the method may
+reduce compute time and energy use, but it may also improve the performance of downstream optimization
+systems in high-stakes domains such as energy, logistics, scheduling, and public-sector resource allocation.
+The main technical risk is that empirically screened acceleration inequality families are not guaranteed to be
+globally valid or optimality preserving on all unseen instances. Users should validate any generated family
+in the target domain, keep a baseline fallback, monitor for regressions, and not treat empirical screening as
+proof of validity. Releasing reproducible evaluation code and synthetic generators helps others inspect the
+workﬂow and test generated families under their own assumptions.
+Acknowledgments
+We thank the action editor and the reviewers for their detailed comments and suggestions.
+References
+Karen Aardal, Yves Pochet, and Laurence A Wolsey. Capacitated facility location: valid inequalities and
+facets. Mathematics of Operations Research , 20(3):562–582, 1995.
+Tobias Achterberg, Robert E Bixby, Zonghao Gu, Edward Rothberg, and Dieter Weninger. Presolve reduc-
+tions in mixed integer programming. INFORMS Journal on Computing , 32(2):473–506, 2020.
+20
+=====PAGE 21
+Published in Transactions on Machine Learning Research (10/2026)
+Ali AhmadiTeshnizi, Wenzhi Gao, and Madeleine Udell. Optimus: scalable optimization modeling with
+(mi)lp solvers and large language models. In Proceedings of the 41st International Conference on Machine
+Learning, pp. 577–596, 2024.
+Tasnim Ahmed and Salimur Choudhury. Lm4opt: Unveiling the potential of large language models in
+formulating mathematical optimization problems. INFOR: Information Systems and Operational Research ,
+62(4):559–572, 2024.
+Alejandro Marcos Alvarez, Quentin Louveaux, and Louis Wehenkel. A machine learning-based approximation
+of strong branching. INFORMS Journal on Computing , 29(1):185–195, 2017.
+David Applegate and William Cook. A computational study of the job-shop scheduling problem. ORSA
+Journal on computing , 3(2):149–156, 1991.
+Samin Aref, Andrew J Mason, and Mark C Wilson. A modeling and computational study of the frustration
+index in signed networks. Networks, 75(1):95–110, 2020.
+Egon Balas. Facets of the knapsack polytope. Mathematical programming, 8(1):146–164, 1975.
+Egon Balas. Disjunctive programming. Annals of discrete mathematics , 5:3–51, 1979.
+Clayton Barrows, Aaron Bloom, Ali Ehlen, Jussi Ikäheimo, Jennie Jorgenson, Dheepak Krishnamurthy,
+Jessica Lau, Brendan McBennett, Matthew O’Connell, Eugene Preston, et al. The ieee reliability test
+system: A proposed 2019 update. IEEE Transactions on Power Systems , 35(1):119–127, 2019.
+John E Beasley. An algorithm for solving large capacitated warehouse location problems. European Journal
+of Operational Research, 33(3):314–325, 1988.
+John E Beasley. Or-library: distributing test problems by electronic mail. Journal of the operational research
+society, 41(11):1069–1072, 1990.
+Hongyu Cheng and Amitabh Basu. Learning cut generating functions for integer programming. In Advances
+in Neural Information Processing Systems , volume 37, pp. 61455–61480, 2024.
+Didier Chételat and Andrea Lodi. Continuous cutting plane algorithms in integer programming. Operations
+Research Letters, 51(4):439–445, 2023.
+Mervat Chouman, Teodor Gabriel Crainic, and Bernard Gendron. Commodity representations and cut-set-
+based inequalities for multicommodity capacitated ﬁxed-charge network design. Transportation Science,
+51(2):650–667, 2017.
+Vasek Chvátal. Edmonds polytopes and a hierarchy of combinatorial problems. Discrete mathematics , 4(4):
+305–337, 1973.
+CommaLAB. Multicommodity ﬂow problem instances repository. https://commalab.di.unipi.it/
+datasets/mmcf, 2021. Accessed: 2025-05-01.
+Alysson M Costa, Jean-François Cordeau, and Bernard Gendron. Benders, metric and cutset inequalities
+for multicommodity capacitated network design. Computational Optimization and Applications , 42(3):
+371–392, 2009.
+Alexandre Salles da Cunha, Luidi Simonetti, and Abilio Lucena. Optimality cuts and a branch-and-cut
+algorithm for the k-rooted mini-max spanning forest problem. European Journal of Operational Research ,
+246(2):392–399, 2015.
+Martin Desrochers and Gilbert Laporte. Improvements and extensions to the miller-tucker-zemlin subtour
+elimination constraints. Operations research letters, 10(1):27–36, 1991.
+Michael R Garey, David S Johnson, and Ravi Sethi. The complexity of ﬂowshop and jobshop scheduling.
+Mathematics of operations research , 1(2):117–129, 1976.
+21
+=====PAGE 22
+Published in Transactions on Machine Learning Research (10/2026)
+Maxime Gasse, Didier Chételat, Nicola Ferroni, Laurent Charlin, and Andrea Lodi. Exact combinatorial
+optimization with graph convolutional neural networks. In Advances in Neural Information Processing
+Systems, volume 32, 2019.
+Bernard Gendron, Teodor Gabriel Crainic, and Antonio Frangioni. Multicommodity capacitated network
+design. In Telecommunications Network Planning, pp. 1–19. Springer, 1999.
+Fred Glover. Improved linear integer programming formulations of nonlinear integer problems. Management
+science, 22(4):455–460, 1975.
+Google DeepMind. Gemini 3 pro model card. https://storage.googleapis.com/deepmind-media/
+Model-Cards/Gemini-3-Pro-Model-Card.pdf , 2025. Model card update: December 2025. Accessed:
+2026-05-07.
+Daya Guo, Dejian Yang, Haowei Zhang, Junxiao Song, Peiyi Wang, Qihao Zhu, Runxin Xu, Ruoyu Zhang,
+Shirong Ma, Xiao Bi, et al. Deepseek-r1 incentivizes reasoning in llms through reinforcement learning.
+Nature, 645(8081):633–638, 2025.
+Gurobi Optimization LLC. Gurobi optimizer reference manual: Parameter reference. https://docs.gurobi.
+com/projects/optimizer/en/current/reference/parameters.html, 2026. Accessed: 2026-05-14.
+William E Hart, Jean-Paul Watson, and David L Woodruﬀ. Pyomo: modeling and solving mathematical
+programs in python. Mathematical Programming Computation , 3(3):219–260, 2011.
+HiGHS Development Team. HiGHS options documentation. https://ergo-code.github.io/HiGHS/dev/
+options/definitions/, 2026. Accessed: 2026-05-14.
+Chenyu Huang, Zhengyang Tang, Shixi Hu, Ruoqing Jiang, Xin Zheng, Dongdong Ge, Benyou Wang, and
+Zizhuo Wang. Orlm: A customizable framework in training large models for automated optimization
+modeling. Operations Research, 2025.
+Sen Huang, Kaixiang Yang, Sheng Qi, and Rui Wang. When large language model meets optimization.
+Swarm and Evolutionary Computation , 90:101663, 2024.
+International Mathematical Olympiad. International mathematical olympiad 2025 problems. https://www.
+imo-official.org/problems.aspx, 2025. Accessed: 2026-05-07.
+Caigao Jiang, Xiang Shu, Hong Qian, Xingyu Lu, Jun Zhou, Aimin Zhou, and Yang Yu. Llmopt: Learning to
+deﬁne and solve general optimization problems from scratch. In Proceedings of the Thirteenth International
+Conference on Learning Representations , Singapore, Singapore, 2025. URL https://openreview.net/
+pdf?id=9OMvtboTJg.
+Elias Khalil, Pierre Le Bodic, Le Song, George Nemhauser, and Bistra Dilkina. Learning to branch in mixed
+integer programming. In Proceedings of the AAAI conference on artiﬁcial intelligence , volume 30, 2016.
+Ed Klotz and Richard Oberdieck. Converting weak to strong mip formulations: A practitioner’s guide. In
+Optimization Essentials: Theory, Tools, and Applications , pp. 113–174. Springer, 2024.
+Ben Knueven, Jim Ostrowski, and Jianhui Wang. The ramping polytope and cut generation for the unit
+commitment problem. INFORMS Journal on Computing , 30(4):739–749, 2018.
+Bernard Knueven, James Ostrowski, and Jean-Paul Watson. On mixed-integer programming formulations
+for the unit commitment problem. INFORMS Journal on Computing , 32(4):857–876, 2020. doi: 10.1287/
+ijoc.2019.0944.
+Thorsten Koch, Tobias Achterberg, Erling Andersen, Oliver Bastert, Timo Berthold, Robert E Bixby, Emilie
+Danna, Gerald Gamrath, Ambros M Gleixner, Stefan Heinz, et al. Miplib 2010: mixed integer program-
+ming library version 5. Mathematical Programming Computation , 3(2):103–163, 2011.
+22
+=====PAGE 23
+Published in Transactions on Machine Learning Research (10/2026)
+Eric Krall, Michael Higgins, and Richard P O’Neill. Rto unit commitment test system. Federal Energy
+Regulatory Commission, 98:126, 2012.
+Gilbert Laporte and Frédéric Semet. An optimality cut for mixed integer linear programs. European Journal
+of Operational Research, 119(3):671–677, 1999.
+Connor Lawless, Yingxi Li, Anders Wikum, Madeleine Udell, and Ellen Vitercik. Llms for cold-start cutting
+plane separator conﬁguration. In International Conference on the Integration of Constraint Programming,
+Artiﬁcial Intelligence, and Operations Research , pp. 51–69. Springer, 2025.
+Sirui Li, Wenbin Ouyang, Max Paulus, and Cathy Wu. Learning to conﬁgure separators in branch-and-cut.
+Advances in Neural Information Processing Systems , 36:60021–60034, 2023.
+Fei Liu, Xialiang Tong, Mingxuan Yuan, Xi Lin, Fu Luo, Zhenkun Wang, Zhichao Lu, and Qingfu Zhang.
+Evolution of heuristics: Towards eﬃcient automatic algorithm design using large language model. In
+Proceedings of the 41st International Conference on Machine Learning , pp. 32201–32223, 2024.
+Fei Liu, Yiming Yao, Ping Guo, Zhiyuan Yang, Xi Lin, Zhe Zhao, Xialiang Tong, Kun Mao, Zhichao Lu,
+Zhenkun Wang, et al. A systematic survey on large language models for algorithm design. ACM Computing
+Surveys, 58(8):1–32, 2026.
+Jens Lysgaard, Adam N Letchford, and Richard W Eglese. A new branch-and-cut algorithm for the capaci-
+tated vehicle routing problem. Mathematical programming, 100:423–445, 2004.
+Alan S Manne. On the job-shop scheduling problem. Operations Research, 8(2):219–223, 1960.
+Clair E Miller, Albert W Tucker, and Richard A Zemlin. Integer programming formulation of traveling
+salesman problems. Journal of the ACM (JACM) , 7(4):326–329, 1960.
+Germán Morales-España, Jesus M Latorre, and Andres Ramos. Tight and compact milp formulation of start-
+up and shut-down ramping in unit commitment. IEEE Transactions on Power Systems , 28(2):1288–1296,
+2012.
+Germán Morales-España, Andres Ramos, and Javier García-González. An mip formulation for joint market-
+clearing of energy and reserves based on ramp scheduling. IEEE Transactions on Power Systems , 29(1):
+476–488, 2013.
+Germán Morales-España, Ross Baldick, Javier García-González, and Andres Ramos. Power-capacity and
+ramp-capability reserves for wind integration in power-based uc. IEEE Transactions on Sustainable Energy ,
+7(2):614–624, 2015.
+Mahdi Mostajabdaveh, Timothy T Yu, Rindranirina Ramamonjison, Giuseppe Carenini, Zirui Zhou, and
+Yong Zhang. Optimization modeling and veriﬁcation from problem speciﬁcations using a multi-agent
+multi-stage llm framework. INFOR: Information Systems and Operational Research , 62(4):599–617, 2024.
+Mahdi Mostajabdaveh, Timothy Tin Long Yu, Samarendra Chandan Bindu Dash, Rindra Ramamonjison,
+Jabo Serge Byusa, Giuseppe Carenini, Zirui Zhou, and Yong Zhang. Evaluating llm reasoning in the
+operations research domain with orqa. In Proceedings of the AAAI Conference on Artiﬁcial Intelligence ,
+volume 39, pp. 24902–24910, 2025.
+OpenAI. Gpt-5.1 model documentation. https://platform.openai.com/docs/models/gpt-5.1, 2025.
+Accessed: 2026-01-28.
+OpenRouter. Google: Gemini 3 pro preview. https://openrouter.ai/google/gemini-3-pro-preview ,
+2025. Accessed: 2026-05-07.
+Max B Paulus, Giulia Zarpellon, Andreas Krause, Laurent Charlin, and Chris Maddison. Learning to cut
+by looking ahead: Cutting plane selection via imitation learning. In International conference on machine
+learning, pp. 17584–17600. PMLR, 2022.
+23
+=====PAGE 24
+Published in Transactions on Machine Learning Research (10/2026)
+Power Grid Lib. Pglib-uc v19.08. https://github.com/power-grid-lib/pglib-uc , 2019. Accessed: 2025-
+05-01.
+Maurice Queyranne and Yaoguang Wang. Single-machine scheduling polyhedra with precedence constraints.
+Mathematics of Operations Research , 16(1):1–20, 1991.
+Rindranirina Ramamonjison, Timothy Yu, Raymond Li, Haley Li, Giuseppe Carenini, Bissan Ghaddar, Shiqi
+He, Mahdi Mostajabdaveh, Amin Banitalebi-Dehkordi, Zirui Zhou, et al. Nl4opt competition: Formulating
+optimization problems based on their natural language descriptions. In NeurIPS 2022 competition track ,
+pp. 189–203. PMLR, 2023.
+Daniel Rehfeldt, Thorsten Koch, and Yuji Shinano. Faster exact solution of sparse maxcut and qubo problems.
+Mathematical Programming Computation , 15(3):445–470, 2023.
+Gerhard Reinelt. Tsplib—a traveling salesman problem library. ORSA journal on computing , 3(4):376–384,
+1991.
+Bernardino Romera-Paredes, Mohammadamin Barekatain, Alexander Novikov, Matej Balog, M Pawan Ku-
+mar, Emilien Dupont, Francisco JR Ruiz, Jordan S Ellenberg, Pengming Wang, Omar Fawzi, Pushmeet
+Kohli, and Alhussein Fawzi. Mathematical discoveries from program search with large language models.
+Nature, 625(7995):468–475, 2024.
+Martin WP Savelsbergh. Preprocessing and probing techniques for mixed integer programming problems.
+ORSA Journal on Computing , 6(4):445–454, 1994.
+SCIP Optimization Suite. SCIP parameter documentation. https://www.scipopt.org/doc/html/
+PARAMETERS.php, 2026. Accessed: 2026-05-14.
+Yunzhuang Shen, Yuan Sun, Andrew Eberhard, and Xiaodong Li. Learning primal heuristics for mixed
+integer programs. In 2021 international joint conference on neural networks (ijcnn) , pp. 1–8. IEEE, 2021.
+FJ Srour, T Máhr, MMd Weerdt, and RA Zuidwijk. Miplib truckload pdptw instances derived from a
+real-world drayage case. erim report series research in management. Finance and Accounting. Erasmus
+Research Institute of Management (ERIM) , 2010.
+Eric Taillard. Benchmarks for basic scheduling problems. European Journal of Operational Research , 64(2):
+278–285, 1993.
+Yunhao Tang, Shipra Agrawal, and Yuri Faenza. Reinforcement learning for integer programming: Learning
+to cut. In International conference on machine learning , pp. 9367–9376. PMLR, 2020.
+Paolo Toth and Daniele Vigo. The vehicle routing problem . SIAM, 2002.
+Mark Turner, Thorsten Koch, Felipe Serrano, and Michael Winkler. Adaptive cut selection in mixed-integer
+linear programming. Open Journal of Mathematical Optimization , 4:1–28, 2023.
+Juan Pablo Vielma. Mixed integer linear programming formulation techniques. Siam Review , 57(1):3–57,
+2015.
+Zhihai Wang, Xijun Li, Jie Wang, Yufei Kuang, Mingxuan Yuan, Jia Zeng, Yongdong Zhang, and Feng
+Wu. Learning cut selection for mixed-integer linear programming via hierarchical sequence model. In
+International Conference on Learning Representations , 2023. URL https://openreview.net/forum?id=
+Zob4P9bRNcK.
+Ziyang Xiao, Dongxiang Zhang, Yangjun Wu, Lilin Xu, Yuan Jessica Wang, Xiongwei Han, Xiaojin Fu,
+Tao Zhong, Jia Zeng, Mingli Song, et al. Chain-of-experts: When llms meet complex operations research
+problems. In The twelfth international conference on learning representations , 2023.
+24
+=====PAGE 25
+Published in Transactions on Machine Learning Research (10/2026)
+Kaiyu Yang, Gabriel Poesia, Jingxuan He, Wenda Li, Kristin E. Lauter, Swarat Chaudhuri, and Dawn
+Song. Position: Formal mathematical reasoning—a new frontier in AI. In Forty-second International
+Conference on Machine Learning Position Paper Track , 2025. URL https://openreview.net/forum?
+id=HuvAM5x2xG.
+Haoran Ye, Jiarui Wang, Zhiguang Cao, Federico Berto, Chuanbo Hua, Haeyeon Kim, Jinkyoo Park, and
+Guojie Song. Reevo: Large language models as hyper-heuristics with reﬂective evolution. In The Thirty-
+eighth Annual Conference on Neural Information Processing Systems , 2024. URL https://openreview.
+net/forum?id=483IPG0HWL.
+Mingxuan Ye, Jie Wang, Fangzhou Zhu, Zhihai Wang, Yufei Kuang, Xijun Li, Weilin Luo, Jianye HAO, and
+Feng Wu. Dynamic conﬁguration for cutting plane separators via reinforcement learning on incremental
+graph. In The Thirty-ninth Annual Conference on Neural Information Processing Systems , 2026. URL
+https://openreview.net/forum?id=iXjVis9Cwn.
+25
+=====PAGE 26
+Published in Transactions on Machine Learning Research (10/2026)
+A SAGE Pseudocode
+Algorithm 1 outlines the full SAGE procedure.
+Algorithm 1 Pseudocode of SAGE
+Require: (i) Baseline MILP Eq. ( 1), (ii) MILP data instances for impact assessment and admissibility, and
+(iii) hyperparameters: population size µ, crossover rate Pc, mutation rate Pm = 1− Pc, elitism ratio re,
+number of generations T , and maximum attempts for a failed generation or admissibility-screening cycle.
+Ensure: A set of discovered acceleration inequality families with corresponding inequality impact scores.
+1: Phase 1: Data Preprocessing
+2: Set up Dimp ={ i↦→ gapref (i)}, Dadm ={ i↦→ ((ˆx∗ i , ˆy∗ i ), (xLP i , yLP i ), gapref (i))}.
+3: Phase 2: Population Initialization
+4: P1←∅ .
+5: while|P1| < µ do
+6: Call initializer LLM → propose candidate acceleration inequality family C.
+7: simp(C)← ScreenAndScoreInequality(C).
+8: if simp(C)⁄= reject then
+9: P1←P 1∪{ C}.
+10: else
+11: Provide feedback prompt to LLM and retry (up to max attempts).
+12: end if
+13: end while
+14: Phase 3: Evolution
+15: for t← 1 to T do
+16: Elitism: transfer top ⌈reµ⌉ fromPt toPt+1.
+17: while|Pt+1| < µ do
+18: Select two parents (Cp, Cq) fromPt using tournament selection based on inequality impact score.
+19: Draw u∼ Uniform(0, 1).
+20: if u < Pc then
+21: Agent Selection: randomly choose a crossover agent from the available pool.
+22: Call the selected Crossover LLM with (Cp, Cq)→ Co.
+23: simp(Co)← ScreenAndScoreInequality(Co).
+24: if simp(Co)⁄= reject then
+25: Pt+1←P t+1∪{ Co}.
+26: if|Pt+1| = µ then
+27: break
+28: end if
+29: else
+30: Provide feedback prompt to the selected crossover LLM and retry (up to max attempts).
+31: end if
+32: else
+33: Agent Selection: randomly choose a mutation agent from the available pool.
+34: Call the selected Mutation LLM with one parent Cp→ Cm.
+35: simp(Cm)← ScreenAndScoreInequality(Cm).
+36: if simp(Cm)⁄= reject then
+37: Pt+1←P t+1∪{ Cm}.
+38: else
+39: Provide feedback prompt to the selected mutation LLM and retry (up to max attempts).
+40: end if
+41: end if
+42: end while
+43: end for
+44: return ﬁnal population PT +1.
+26
+=====PAGE 27
+Published in Transactions on Machine Learning Research (10/2026)
+In Algorithm 1, ScreenAndScoreInequality(C) denotes the local routine that ﬁrst runs
+InequalityAdmissibilityScreen(C) on Dadm. If any admissibility check fails, the routine returns reject.
+Otherwise, InequalityImpactScorer(C) computes and returns the inequality impact score simp(C) on Dimp.
+The reduced model ﬁxes every original variable and leaves only the auxiliary variables of the candidate family
+free. The OSS check accepts a candidate when this model is feasible for every stored reference solution. The
+LP separation check accepts it when the corresponding model is infeasible for at least one stored LP solution.
+A code, OSS, or LP separation failure produces a diagnostic prompt for a retry.
+B SAGE Agents
+This section outlines the agents used in the SAGE process and presents their prompt structures, including
+roles, tasks, requirements, and inputs/outputs. The agent library includes a single initializer and several
+Mutation and Crossover agents. Consistent with the framing in Section 4, these prompts seek useful accel-
+eration inequality families, while the Inequality Admissibility Screen later decides which candidates survive
+based on empirical admissibility checks. The prompt structure for the initializer agent is as follows:
+initializer agent
+Role: You are an MILP optimization expert with extensive knowledge in proposing acceleration
+inequality families for MILP models.
+Task:
+• Propose a useful acceleration inequality family that is likely to improve solver performance.
+• Provide a clear, concise explanation of the inequality intuition and its expected impact.
+Requirements:
+• Do not assume a formal proof of global validity is available.
+• The proposal should be broadly reusable across instances of the symbolic MILP formulation.
+• Introduce new variables or constructs if needed.
+• The idea should be conceptually distant from previous ideas.
+Input:
+• < Baseline MILP (Pyomo model code) >.
+• < List of previous ideas (if applicable) >.
+Output:
+{"code": "<Only python code snippet for the added inequality family using Pyomo syntax>",
+"idea": "Concise technical explanation of the inequality intuition and expected impact"}
+We employ three mutation agents, General Mutation, Lifted Mutation, and Exploratory Mutation, each of
+which follows the prompt structure described below.
+Mutation Agents
+Role: MILP optimization expert tasked with analyzing and modifying an individual’s acceleration
+inequality family in an Evolutionary Algorithm for MILP acceleration inequality family generation.
+Task:
+• Propose a useful acceleration inequality family by building on the idea behind the provided indi-
+vidual family.
+27
+=====PAGE 28
+Published in Transactions on Machine Learning Research (10/2026)
+• Provide a concise explanation of the inequality intuition and expected impact.
+• <Agent speciﬁc instruction >
+Requirements:
+• Do not assume a formal proof of global validity is available.
+• The new family should improve on the provided input family in spirit, structure, or empirical
+promise.
+• Introduce new variables if needed.
+Input:
+• < Baseline MILP (Pyomo model code) >.
+• < Input inequality family (code, idea, and score) >.
+Output:
+{"code": "<Only python code snippet for the added inequality family using Pyomo syntax>",
+"idea": "Concise technical explanation of the inequality intuition and expected impact"}
+Agent speciﬁc instruction: Each mutation agent performs the same core task, with the following variations:
+• General Mutation: Proposes a new family based on the individual family while modifying its structure
+or coeﬃcients.
+• Lifted Mutation : Enhances the family by borrowing lifting-style ideas or auxiliary structure when
+useful.
+• Exploratory Mutation : Generates an exploratory family that diverges from the provided family to
+explore new regions of the design space.
+Similarly, SAGE includes four crossover agents (Intersection, Complementary, Hybrid, and Min Violation)
+with the following prompt design.
+Crossover Agents
+Role: MILP optimization expert tasked with performing crossover between two parent acceleration
+inequality families.
+Task:
+• Generate a useful acceleration inequality family by combining elements from the parent families.
+• Provide a concise explanation of the new family’s idea and expected impact.
+• <Agent speciﬁc instruction >
+Requirements:
+• Do not assume a formal proof of global validity is available.
+• Combine elements from both parent families in a distinct and eﬀective way.
+• Introduce new variables or auxiliary constructs if needed.
+Input:
+• < Baseline MILP (Pyomo model code) >.
+28
+=====PAGE 29
+Published in Transactions on Machine Learning Research (10/2026)
+• < First parent inequality family (code, idea, and score) >.
+• < Second parent inequality family (code, idea, and score) >.
+Output:
+{"code": "<Only python code snippet for the added inequality family using Pyomo syntax>",
+"idea": "Concise technical explanation of the inequality intuition and expected impact"}
+Agent speciﬁc instruction: Each crossover agent performs the same core task, with the following variations:
+• Intersection Crossover: Combines elements of both parents to generate a family that preserves useful
+structural motifs from each.
+• Complementary Crossover: Generates a family that complements both parents, creating a more
+distinct solution.
+• Hybrid Crossover: Combines structural elements from one parent with numerical or conditional
+features from the other.
+• Min Violation Crossover: Selects a crossover that minimizes the joint violation of both parents in
+previous runs.
+C Detailed Evolutionary Diagnostics
+C.1 Evolutionary Generation of an Acceleration Inequality Family
+Fig. 4 shows how SAGE with DeepSeek-R1 mutates and recombines candidate acceleration inequality fami-
+lies to obtain a strong family for the JSSP. Green boxes list candidate families with their inequality impact
+scores. Arrows connect parents to oﬀspring, and yellow panels quote the agent instructions that produced
+the oﬀspring.
+29
+=====PAGE 30
+Published in Transactions on Machine Learning Research (10/2026)
+  
+Per ‑ machine workload lower bound:  must at least equal each
+machine’s total processing time.
+Skips machines with no operations to avoid errors. Computes job
+prefix/suffix times only when needed, ensuring Cmax respects machine
+workloads and job order, while preserving strengthened bounds.
+Lifted
+  
+ ≥ each machine’s load plus its shortest job ‐ prefix and job ‐ suffix.
+  
+ must at least equal the average workload per machine.
+Combines Parent1's global average with Parent2's machine-specific bounds. Calculates a
+global and machine-based lower bound, enforcing Cmax ≥ their maximum. Improves tightness
+by balancing overall load and critical machine sequences.
+Intersection
+  
+ ≥ the largest of (average load, worst machine’s critical path, or longest job). Job ‑ interference bound: each job’s duration plus unavoidable minimal overlap on its machines bounds .
+Combined the max of the global-average and lifted-machine/longest-job
+bounds with the job-interference bound via a max operator to yield the
+hybrid cut.
+Hybrid
+  
+takes the tightest among global average, lifted machine load, and job ‑ interference bounds for .
+  
+Combined bound:  must exceed both the global average load and the tightest lifted machine workload.
+Lifted Exploratory
+: 15.7 
+: 15.9 : 10.8
+: 16.7
+: 16.7 : 17.0
+: 21.4
+Lifted the combined max bound by incorporating the longest job’s
+total processing time as an additional term.
+Computes per-job lower bounds by adding a job’s total time to minimal interference
+from others on shared machines. Captures unavoidable delays, reflecting job-
+specific contention and complementing machine-based bounds.
+Figure 4: Example JSSP evolutionary trajectory. The green panels show candidate families with annotated
+inequality impact scores, and the yellow panels show the agent instructions that produced each oﬀspring.
+Hybrid Crossover combines parents with impact scores of 16.7 and 17.0 and produces a family with a score
+of 21.4.
+C.2 Population-Level Inequality Impact Score Progress
+Fig. 5 plots the best (blue, dashed) and mean (orange, dash-dotted) inequality impact scores observed over 20
+generations of SAGE on the TSP, MCND, CWLP, JSSP, IMO6, PDPTW, and SHUC benchmarks. Shaded
+bands indicate one standard deviation.
+Generation 0 marks the neutral score of 10 for the baseline without an added family, and generation 1 is the
+initial population produced by the initializer agent. The best score rises from the initial population to the
+ﬁnal generation on every benchmark. It rises from 9.4 to 13.7 on TSP, 10.3 to 12.0 on MCND, 15.4 to 19.3
+on JSSP, 20.7 to 26.4 on CWLP, 12.4 to 17.4 on IMO6, 10.2 to 14.7 on PDPTW, and 19.6 to 23.7 on SHUC.
+C.3 Token Matched Initializer Control
+We compare ﬁve generations of SAGE with iterative initialization and feedback on JSSP using DeepSeek-
+R1. We follow the setup of Section 5.1, using 24 threads for development scoring and Seed=42 for test
+solves. Both runs start from the same initial population, with a best score of 17.60, and use the same frozen
+development instances. The control repeatedly calls the standard initializer with the baseline model code
+and feedback on recent ideas, scores, and rejections. It receives no code from earlier candidates and uses no
+parent selection, crossover, mutation, or elitism. The common retry procedure can reuse a candidate’s own
+code within its round.
+30
+=====PAGE 31
+Published in Transactions on Machine Learning Research (10/2026)
+0 4 8 12 16 204
+8
+12
+16
+TSP
+0 4 8 12 16 205
+10
+14
+MCND
+0 4 8 12 16 204
+8
+12
+16
+20
+JSSP
+0 4 8 12 16 205
+10
+20
+30
+CWLP
+0 4 8 12 16 204
+8
+12
+16
+18
+IMO6
+0 4 8 12 16 208
+10
+12
+14
+PDPTW
+0 4 8 12 16 20
+Generation
+0
+10
+20
+30
+SHUC
+simp(C)
+Improvement region Best simp(C) Mean simp(C)
+Figure 5: Best (blue, dashed) and mean (orange, dash-dotted) inequality impact scores across 20 generations
+for the TSP, MCND, CWLP, JSSP, IMO6, PDPTW, and SHUC benchmarks. Shaded regions show one
+standard deviation.
+31
+=====PAGE 32
+Published in Transactions on Machine Learning Research (10/2026)
+After shared initialization, SAGE uses 761,451 provider reported tokens and the control uses 765,308, or
+0.51% more. Each run selects its best family within the SAGE token budget, including the shared initial
+population. The control accepts 15 new families, of which 14 ﬁnish within this budget. Including its ﬁnal
+candidate leaves the selected family unchanged. Table 9 in Section 5.9 reports the development comparison.
+After shared initialization, SAGE completes 35 impact scorer calls totaling 2328.54 recorded solver seconds.
+The control completes 15 impact scorer calls totaling 1150.56 solver seconds, with 14 calls and 1053.22
+seconds within the target token budget.
+The best control family is the machine critical path bound from the shared initialization, described in
+Appendix F.4. The best SAGE family, produced by Exploratory Mutation, sorts the operations of each
+machine by nonincreasing tail. It bounds the makespan by the largest preﬁx value of the minimum head
+plus the preﬁx processing time plus the minimum tail. The full preﬁx recovers the control bound. We
+compare these bounds on the JSSP test set and check both families against the stored proven optimal
+solutions using the protocol of Section 5.4. The evolved bound is strictly larger on 38 instances and equal
+on 42, and both families preserve all 58 stored solutions.
+Table 11 evaluates the two families selected in Table 9 against the same baseline trace for each of the JSSP
+test instances. At checkpoints without an incumbent, we assign a gap of 1.
+Paired diﬀerences give SAGE minus control improvements. Positive diﬀerences favor SAGE. Pointwise 95%
+bootstrap intervals use 10,000 resamples of the instance pairs at each checkpoint. Wins, losses, and ties use
+strict comparisons of the recorded gaps.
+Table 11: JSSP deployment results for the families selected in Table 9. ¯∆g is reported as mean with standard
+deviation (%). Diﬀerence and CI give the mean paired diﬀerence and its pointwise conﬁdence interval in
+percentage points. W/L/T gives win, loss, and tie counts for SAGE against the initializer.
+t (s) SAGE Initializer Diﬀerence 95% CI W/L/T
+5 33.8 (± 22.6) 17.9 (± 28.1) 15.9 [11.7, 20.1] 44 / 9 / 27
+10 34.7 (± 23.1) 25.1 (± 27.8) 9.6 [6.0, 13.2] 41 / 11 / 28
+50 26.8 (± 26.4) 22.8 (± 31.2) 4.0 [0.9, 7.1] 35 / 15 / 30
+150 37.2 (± 28.3) 34.9 (± 33.4) 2.3 [−0.7, 5.3] 34 / 23 / 23
+300 28.4 (± 27.1) 23.5 (± 34.5) 4.9 [1.1, 8.7] 38 / 17 / 25
+1000 38.6 (± 26.8) 34.5 (± 35.2) 4.1 [−0.4, 8.6] 35 / 22 / 23
+2000 40.5 (± 25.9) 38.2 (± 37.1) 2.3 [−2.8, 7.4] 33 / 24 / 23
+Table 11 reports higher mean relative gap improvement for SAGE at all seven checkpoints, with paired
+diﬀerences from 2.3 to 15.9 percentage points. The pointwise 95% conﬁdence intervals are above zero at 5,
+10, 50, and 300 s and include zero at 150, 1000, and 2000 s.
+D Supplementary Mathematical Preliminaries
+D.1 Geometric intuition for valid inequalities
+Let conv(S) denote the convex hull of S, i.e., the smallest convex set that contains S. Valid inequalities
+tighten P toward conv(S), narrowing the gap between the LP optimum and the true MILP optimum. Adding
+inequalities that are valid for conv(S) can separate some fractional extreme points of P and can reduce the
+integrality gap. Optimality-preserving inequalities need not be valid for conv(S) but can still speed up branch-
+and-bound by pruning provably suboptimal regions. Fig. 6 provides a schematic view of the integer feasible
+set S, its LP relaxation P , and the convex hull conv(S). It also contrasts (i) valid inequalities that remove
+fractional LP optima while preserving all points in conv(S), and (ii) optimality-preserving inequalities that
+may remove some feasible points but keep the optimal objective value unchanged. SAGE instead generates
+acceleration inequality families that are empirically checked on an admissibility set (Section 4).
+32
+=====PAGE 33
+Published in Transactions on Machine Learning Research (10/2026)
+0 1 2 3 4
+x1
+0
+1
+2
+3
+4
+x2
+Linear relaxation set
+Convex hull
+Integer feasible
+IP optimum
+LP optimum (fractional)
+Valid and useful cut
+Optimality-preserving cut
+Figure 6: Relationship between the integer feasible set S, its LP relaxation P , the set conv(S), a valid
+inequality that removes the fractional LP optimum (useful), and an optimality-preserving inequality that
+may remove some feasible points while keeping the optimal value.
+D.2 Polyhedra and Facets
+A polyhedron is any set Q in Rn that can be described by ﬁnitely many linear inequalities. The constraints
+Ax≤ b are the linear inequalities that deﬁne Q.
+Q = { x∈ Rn : Ax≤ b}.
+Polyhedra are convex, and if Q is bounded, it is called a polytope.
+A face of a polyhedron Q is a set of the form F := Q∩{ x∈ Rn : cx = β} where cx≤ β is a valid inequality
+for Q. We say that the valid inequality cx≤ β deﬁnes the face F of the polyhedron Q. The equation
+cx = β deﬁnes a supporting hyperplane that intersects Q. A facet is a face of maximum dimension (i.e., one
+dimension less than that of the polyhedron).
+For example, consider a cube as a 3D polytope in R3 and a plane as the supporting hyperplane. Intersecting
+a cube with a supporting hyperplane may result in a 0D corner point, a 1D straight line, or a 2D plane. The
+corner point, the line (edge of a cube), and the 2D plane are all faces of the 3D cube. However, only the 2D
+plane is a facet of the 3D cube.
+D.3 Facet-Deﬁning Valid Inequalities
+In integer programming, valid inequalities that are facet-deﬁning for conv(S) are especially important because
+they are necessary and suﬃcient for characterizing conv(S). Once conv(S) is characterized, solving the MILP
+over S reduces to the linear program of maximizing c⊤x + h⊤y over conv(S), which is polynomially solvable.
+E Additional Experiments
+E.1 Aggregate gap improvement curves
+Fig. 7 reports the mean stabilized relative gap improvement ¯∆g(t) as a function of time after augmenting
+the baseline MILP with the selected SAGE acceleration inequality family, averaged across held-out test
+instances (TSP, MCND, CWLP, JSSP, PDPTW, IMO6, and SHUC). This plot complements the checkpoint
+summaries in Table 2 by showing the full 2000 s proﬁle rather than only selected checkpoints.
+E.2 Held-Out LP Separation Rates
+As a robustness and admissibility check, we also test whether the selected SAGE acceleration inequality
+family separates the baseline LP optimum on held-out test instances. This repeats the LP-separation check
+from Section 4, but uses Dt instead of the small admissibility set Dadm. For each test instance, we ﬁx the
+original decision variables to the baseline LP optimum, append the selected acceleration inequality family,
+and solve only for any auxiliary variables introduced by the family. If this reduced model is infeasible, the
+family separates that LP optimum. The resulting rate measures one baseline LP optimum per test instance.
+33
+=====PAGE 34
+Published in Transactions on Machine Learning Research (10/2026)
+0 500 1000 1500 2000
+−25
+0
+25
+50
+75
+100
+TSP
+0 500 1000 1500 2000
+−25
+0
+25
+50
+75
+100
+MCND
+0 500 1000 1500 2000
+−25
+0
+25
+50
+75
+100
+CWLP
+0 500 1000 1500 2000
+−25
+0
+25
+50
+75
+100
+JSSP
+0 500 1000 1500 2000
+−25
+0
+25
+50
+75
+100
+PDPTW
+0 500 1000 1500 2000
+−25
+0
+25
+50
+75
+100
+IMO6
+0 500 1000 1500 2000
+−25
+0
+25
+50
+75
+100
+SHUC
+Time (seconds)
+Relative gap improvement ̄Δg(t) (%) ↑
+Improvement region ± 1σ Mean ̄Δg(t)
+Figure 7: Change over time (up to 2000 s) of the mean stabilized relative gap improvement ¯∆g(t) after
+adding the selected SAGE acceleration inequality family to the baseline MILP for TSP, MCND, CWLP,
+JSSP, PDPTW, IMO6, and SHUC. The solid line is the mean across test instances at each wall-clock time
+and the shaded band indicates one standard deviation ( σ). Positive values mean the augmented model has
+a smaller optimality gap at that wall-clock time.
+Table 12: Held-out test-set LP separation rate of the selected SAGE acceleration inequality family.
+Problem Separated / Total Rate (%)
+TSP 54/54 100.0
+MCND 72/81 88.9
+CWLP 36/36 100.0
+JSSP 80/80 100.0
+PDPTW 165/165 100.0
+IMO6 34/34 100.0
+SHUC 48/56 85.7
+34
+=====PAGE 35
+Published in Transactions on Machine Learning Research (10/2026)
+Table 12 shows that the selected acceleration inequality family separates the LP optimum on all TSP, CWLP,
+JSSP, PDPTW, and IMO6 test instances. For MCND and SHUC, the measured separation rates are 88.9%
+and 85.7%, respectively.
+E.3 Discovery Cost and Deployment Payback
+This experiment measures the cost of one SAGE search, deployment setup, and payback on 450 reserved
+test instances from TSP, MCND, CWLP, JSSP, PDPTW, and IMO6. We charge the full search budget from
+Section 5.1 as the discovery cost. One Gemini 3 Pro search costs about USD 30 in API calls. Appendix G
+reports API settings and total costs. In the JSSP control run of Appendix C.3, LLM replies account for
+83.3% of the elapsed wall clock time. Deployment setup is the added time for model construction, family
+instantiation, and loading the persistent solver model. Payback uses target g≤ 10−3 and caps solver time to
+target at Tmax. The Baseline and SAGE columns report the mean capped solver times. The Solves column
+divides the search budget in seconds by the unrounded diﬀerence between these means. The last column
+adds setup time to the SAGE time before computing payback.
+Table 13: Discovery payback at g≤ 10−3 on reserved test instances. Setup is the mean added deployment
+setup time. Solves is the number of deployments whose solver time savings recover the search budget. The
+last column charges the added setup time to SAGE as well.
+Problem Setup (s) Baseline (s) SAGE (s) Solves Solves with setup
+TSP 0.94 1063.8 760.3 238 238
+MCND 0.006 640.7 627.1 5276 5278
+CWLP 0.97 220.5 11.4 345 347
+JSSP 0.46 1886.5 1846.1 1782 1803
+PDPTW 0.08 2000.0 1962.7 1933 1935
+IMO6 10.55 1594.5 1555.1 1828 2496
+The mean added setup time ranges from 0.006 seconds on MCND to 10.55 seconds on IMO6. The estimated
+payback in solver time ranges from 238 solves on TSP to 5276 solves on MCND. Charging the setup time as
+well leaves ﬁve benchmarks within 21 solves of these values and raises IMO6 from 1828 to 2496 solves.
+E.4 Sensitivity to the Continuous Solution Method
+This experiment ﬁxes the selected TSP family and compares the automatic method with the deterministic
+concurrent method on TSP test instances. We use a 300 second limit.
+Table 14: TSP sensitivity to the Gurobi continuous solution method.
+Method Mean stabilized relative gap improvement (%)
+Automatic ( −1) 34.3 ± 29.3
+Deterministic concurrent (4) 27.6 ± 33.1
+Both methods give positive mean improvement. The mean is 34.3% with the automatic method and 27.6%
+with the deterministic concurrent method.
+E.5 Anonymized Formulation Control
+This experiment tests SAGE on an unpublished problem and formulation for which no inequality family
+had been published. Appendix F.8 gives the RNTD description, formulation, selected family, generator, and
+instance details. We compare the baseline formulation with the same formulation augmented by the family
+selected on the development set.
+35
+=====PAGE 36
+Published in Transactions on Machine Learning Research (10/2026)
+For this control, the baseline model input in Appendix B was the Pyomo implementation of Eq. ( 11). Its
+identiﬁers and comments referred only to nodes, links, commodities, capacity, degree, hops, and a reference
+vector. The prompt did not contain the RNTD name or an application description.
+Table 15: RNTD test mean stabilized relative gap improvement ¯∆g (%). Mean ±σ is reported at each
+checkpoint.
+Problem 5 s 10 s 50 s 150 s 300 s 1000 s 2000 s A verage
+RNTD 18 ± 35 −50 ± 197 24 ± 17 24 ± 19 25 ± 20 28 ± 20 23 ± 19 13
+The mean improvement is positive at six of seven checkpoints and is 23±19% at 2000 seconds. At 10 seconds,
+the mean is −50%, while the augmented model has a smaller gap on 36 test instances.
+Table 16: RNTD time to target results. B/A counts the baseline and augmented runs that reach the target.
+Target gap B/A SGM speedup
+10−5 9/12 4.2×
+10−4 9/12 4.2×
+10−3 9/13 4.2×
+10−2 44/44 2.7×
+10−1 44/44 1.0×
+A verage 23.0/25.0 3.3×
+The SGM speedup exceeds one at four of ﬁve target gaps and averages 3.3×.
+E.6 Model Size and LP Relaxation
+We count the baseline model and the increments from the complete selected family on every test instance
+before solver presolve. For each instance with a proven integer objective, we also compute
+gLP = |zIP− zLP| max{|zIP|, 10−8} .
+Gap closure is computed per instance as (zaug LP − zbase LP )/(zIP− zbase LP ). Table 17 reports means across each
+test set. Ranges follow the model size means in brackets. The LP objective improvement count uses every
+test instance.
+36
+=====PAGE 37
+Published in Transactions on Machine Learning Research (10/2026)
+Table 17: Model size and LP relaxation results for the baseline and the model augmented by the selected
+SAGE family. Auxiliary variables and added rows are increments from the selected family.
+(a) Model size.
+Benchmark Baseline variables Auxiliary variables Baseline rows Added rows
+TSP 15,821.6 [196, 52,441] 0 15,931.0 [211, 52,671] 31,319.2 [351, 104,196]
+MCND 24,991.9 [4,920, 63,315] 0 2,485.2 [920, 4,315] 38.2 [36, 40]
+CWLP 34,398.0 [816, 100,100] 0 420.2 [66, 1,100] 34,343.3 [793, 100,009]
+JSSP 21,382.2 [1,801, 101,001] 1,431.2 [450, 4,000] 42,046.9 [3,375, 200,000] 1,613.1 [246, 6,081]
+PDPTW 11,090 0 4,565 4,161
+IMO6 20,759.5 [63, 73,224] 0 7,524.5 [39, 26,010] 19,368.0 [41, 69,407]
+SHUC 276,709.7 [38,928, 426,240] 61,105.4 [6,935, 92,910] 369,301.0 [41,998, 561,468] 336,793.7 [38,927, 511,562]
+(b) LP relaxation.
+Benchmark Proven N Baseline LP gap Augmented LP gap Gap closed LP objective improved
+TSP 54 21.90% 8.96% 62.51% 53/54
+MCND 77 25.45% 24.62% 2.81% 72/81
+CWLP 36 24.93% 0.38% 98.59% 36/36
+JSSP 58 48.34% 2.94% 88.85% 80/80
+PDPTW 0 n/a n/a n/a 165/165
+IMO6 9 90.01% 26.23% 70.88% 34/34
+SHUC 53 0.57% 0.43% 26.44% 48/56
+Table 17 shows that only JSSP and SHUC introduce auxiliary variables. Among benchmarks with proven
+objectives, the mean per-instance gap closure is smallest on MCND (2.81%, mean LP gap 25.45% to 24.62%)
+and largest on CWLP (98.59%, mean LP gap 24.93% to 0.38%), while PDPTW has no proven objective
+and its mean LP objective increases from 22,013.02 to 504,451.72 on its test instances. On TSP, the family
+separates the baseline LP optimum on all test instances (Table 12) but leaves the LP objective unchanged
+on instance ts225, so the LP objective improves on 53 instances.
+E.7 Static Literature Augmentation Baselines
+This experiment compares the selected static SAGE acceleration inequality families with a static set of valid
+inequalities from the literature. We keep the same base formulations, test sets, solver budget, and time-to-
+target evaluation protocol used in Section 5.3. The only change is that the SAGE acceleration inequality
+families are replaced by the corresponding published valid inequalities. Since several of these inequalities are
+indexed by node subsets, this is a static model augmentation comparison rather than a dynamic separation
+implementation.
+LetG ={10−5, 10−4, 10−3, 10−2, 10−1}. For an instantiated static literature valid inequality set L, Table 18
+reports
+¯sL = 1 |G| ∑ g∈G SGM(tref (g)) SGM(tL(g)) ,
+using the same shifted geometric mean convention as Table 3. Values larger than one mean that the model
+augmented with static literature valid inequalities reaches the target gaps faster than the baseline MILP on
+average.
+Table 18: Mean SGM speedup for static literature valid inequalities and SAGE acceleration inequality
+families. Each value is averaged over the same ﬁve target gaps used in Table 3.
+Problem Static literature valid inequalities SAGE families
+CWLP 3.01× 4.02×
+JSSP 1.91× 3.33×
+MCND 1.01× 1.01×
+TSP 2.57× 2.87×
+Table 18 shows that the SAGE acceleration inequality families yield a larger mean speedup than the instan-
+tiated static literature valid inequalities on CWLP, JSSP, and TSP, and are essentially tied on MCND. The
+37
+=====PAGE 38
+Published in Transactions on Machine Learning Research (10/2026)
+average over these four rows is 2.81× for SAGE and 2.13× for the static literature valid inequalities. The
+largest absolute gap is on JSSP ( 3.33× vs. 1.91×, a 1.42× margin), followed by CWLP ( 4.02× vs. 3.01×, a
+1.01× margin). TSP is close ( 2.87× vs. 2.57×, a 0.30× margin), and MCND is tied ( 1.01× vs. 1.01×).
+CWLP inequalities. For each warehouse j, the capacity row in Eq. ( CWLP) induces a 0–1 knapsack
+structure over customer-assignment variables xij. Following the 0–1 knapsack inequality in Balas Balas (1975)
+and the facility-location inequalities in Aardal et al. Aardal et al. (1995), any set C⊆ I with ∑ i∈C di > u j
+gives 
+
+
+∑
+i∈C
+xij ≤ (|C| − 1)yj ∀j ∈ J, C ⊆ I :
+∑
+i∈C
+di > u j ,
+∑
+i∈I: di >uj /(q+1)
+xij ≤ q yj ∀j ∈ J, q = 1 , . . . , |I| − 1.
+(LIT-CWLP)
+The second row is the threshold form of the same inequality: if each selected customer has demand greater
+than uj/(q + 1), then no feasible integer solution can assign q + 1 such customers to warehouse j. This is the
+same local capacity logic present in the CWLP SAGE acceleration inequality family, but the SAGE version
+also includes global demand-threshold slot bounds.
+JSSP inequalities. Using the JSSP notation from Appendix F.4, write an operation as a = ( j, k), its
+start time as Sa := Sj,k, and its processing time as pa := pj,k. For Q⊆ Om, deﬁne
+PQ :=
+∑
+a∈Q
+pa, H Q := min a=(j,k)∈Q
+∑
+t<k
+pj,t, T Q := min a=(j,k)∈Q
+∑
+t>k
+pj,t,
+and ΦQ := ∑ {a,b}⊆Q papb. Applegate and Cook Applegate & Cook (1991) give the two inequalities
+
+
+
+∑
+a∈Q
+paSa ≥ HQPQ + ΦQ ∀m, Q ⊆ Om,
+∑
+a∈Q
+pa(Cmax − Sa) ≥ TQPQ +
+∑
+a∈Q
+p2 a + ΦQ ∀m, Q ⊆ Om.
+(LIT-JSSP)
+These inequalities use job heads and tails to bound how early a set of operations on one machine can start
+and how late they can ﬁnish. In our experiments they yield a meaningful mean speedup (Table 18), while
+the SAGE acceleration inequality family in Appendix F.4 acts directly as a makespan lower-bound family
+and produces a larger speedup on the same benchmark.
+MCND inequalities. For a node subset S⊆ N , let δ+(S), K(S), B⊆ K(S), and DB be deﬁned as
+in Appendix F.2. Chouman et al. Chouman et al. (2017) deﬁne bB ij := min{uij, DB} for this node subset
+relaxation and include the following two inequalities:
+
+
+
+∑
+(i,j)∈δ+ (S)
+min{uij , DB } yij ≥ DB ∀S ⊆ N, B ⊆ K(S),
+∑
+(i,j)∈δ+ (S)
+yij ≥ qS,B ∀S ⊆ N, B ⊆ K(S),
+(LIT-MCND)
+where qS,B is the smallest number of largest-capacity arcs in δ+(S) whose total capacity can cover DB. The
+selected SAGE MCND rows in Eq. ( SAGE-MCND) use the same algebraic form, but they are added only
+for the generated pairs used by the implementation.
+TSP inequalities. The compact TSP model in Eq. ( MTZ) uses the Miller–Tucker–Zemlin ordering vari-
+ables Miller et al. (1960). Desrochers and Laporte Desrochers & Laporte (1991) give the following lifted
+ordering rows in the notation of Appendix F.1:
+
+
+
+ui − uj + (n − 1)xij + (n − 3)xji ≤ n − 2 ∀i, j ∈ V \ {1}, i ⁄= j,
+ui ≥ 3 − x1i + (n − 3)xi1 ∀i ∈ V \ {1},
+ui ≤ (n − 1) + xi1 − (n − 3)x1i ∀i ∈ V \ {1}.
+(LIT-TSP)
+38
+=====PAGE 39
+Published in Transactions on Machine Learning Research (10/2026)
+The TSP SAGE acceleration inequality family in Eq. ( SAGE-TSP) contains these rows and augments them
+with explicit two-cycle and depot-anchored short-cycle eliminators.
+E.8 Solver Default Parameters
+Table 19 lists important solver defaults that were not set by our experiments but can aﬀect MILP search.
+We omit MIPGap, Seed, Method, WorkLimit, TimeLimit, and the stated Gurobi thread setting because these
+are already given in Section 5.1. The listed values are documented defaults, not tuned settings ( Gurobi
+Optimization LLC , 2026; SCIP Optimization Suite , 2026; HiGHS Development Team , 2026).
+Table 19: Important default solver parameters not otherwise listed in the experimental setup.
+Solver Parameter Default Role
+Gurobi MIPGapAbs 1e-10 Absolute optimality gap tolerance.
+Gurobi Presolve -1 Automatic presolve control.
+Gurobi Cuts -1 Automatic global cut generation control.
+Gurobi Heuristics 0.05 Target fraction of runtime for primal heuristics.
+Gurobi MIPFocus 0 Balanced MIP search focus.
+Gurobi Symmetry -1 Automatic symmetry detection.
+SCIP 10.0 limits/gap 0 Relative optimality gap limit.
+SCIP 10.0 limits/absgap 0 Absolute optimality gap limit.
+SCIP 10.0 presolving/maxrounds -1 Automatic number of presolving rounds.
+SCIP 10.0 separating/maxrounds -1 Automatic separation rounds after root.
+SCIP 10.0 separating/maxroundsroot -1 Automatic separation rounds at the root node.
+SCIP 10.0 separating/maxcuts 100 Cut pool limit outside the root node.
+SCIP 10.0 separating/maxcutsroot 2000 Cut pool limit at the root node.
+SCIP 10.0 misc/usesymmetry 7 Symmetry handling mode.
+SCIP 10.0 parallel/maxnthreads 8 Maximum number of parallel threads.
+HiGHS mip_rel_gap 1e-4 Relative optimality gap tolerance.
+HiGHS mip_abs_gap 1e-6 Absolute optimality gap tolerance.
+HiGHS presolve choose Automatic presolve control.
+HiGHS mip_heuristic_effort 0.05 Eﬀort level for MIP heuristics.
+HiGHS mip_allow_cut_separation_at_nodes true Enables cut separation at branch-and-bound nodes.
+HiGHS mip_detect_symmetry true Enables MIP symmetry detection.
+HiGHS threads 0 Automatic thread count.
+HiGHS parallel choose Automatic parallel execution mode.
+E.9 Illustrative TSP Instance Trajectories
+Fig. 8 plots the full gap traces over time for four instances from the Traveling Salesman Problem Library
+(TSPLIB). Each panel compares the baseline MILP (blue line) with the same model augmented by the se-
+lected SAGE acceleration inequality family found during evolution (orange line). The acceleration inequality
+family used in Fig. 8 for the TSP model is described in Appendix F.1.
+39
+=====PAGE 40
+Published in Transactions on Machine Learning Research (10/2026)
+0.0
+0.2
+0.4
+0.6
+0.8 optimal @ 891 s
+gr202 kroB150
+0 500 1000 1500 20000.0
+0.2
+0.4
+0.6
+0.8
+kroA200
+0 500 1000 1500 2000
+optimal @ 798 s
+kroD100
+Time (seconds)
+MIP gap  ( ↓  better)
+Baseline Optimality reachedSAGE better Baseline + SAGE
+Figure 8: Gap trajectories over time for four representative TSP instances ( gr202, kroB150, kroA200, and
+kroD100) from Reinelt (1991). Orange: baseline MILP augmented with the selected SAGE acceleration
+inequality family. Blue: baseline MILP.
+The augmented model reaches optimality on gr202 at 891 s and kroD100 at 798 s. Its gap curve lies below
+the baseline curve for most of the plotted horizon in all four panels.
+E.10 Best Bound Trajectories for Representative TSP Instances
+Fig. 9 complements the gap results of Section 5.2 by plotting the solver’s reported best bound over time for
+four representative TSP test instances drawn from Dt. For each instance, we show two curves: the baseline
+MILP (reference) and the MILP augmented with the selected SAGE acceleration inequality family. Solver
+logs are sampled when the solver ﬁnds an MILP incumbent, up to the same 2000 s wall-clock limit. Because
+TSP is formulated as a minimization problem, higher curves correspond to tighter lower bounds.
+38500
+39000
+39500
+40000 optimal
+@ 891 s
+gr202
+24800
+25000
+25200
+25400
+25600
+25800
+kroB150
+0 500 1000 1500 2000
+27600
+27800
+28000
+28200
+28400
+28600
+28800
+kroA200
+0 500 1000 1500 2000
+20000
+20250
+20500
+20750
+21000
+21250 optimal
+@ 798 s
+kroD100
+Time (seconds)
+Best bound  ( ↑  better)
+Baseline Optimality reachedSAGE better Baseline + SAGE
+Figure 9: Evolution of the solver’s best bound for four representative TSP instances. Blue lines: baseline
+MILP (reference). Orange lines: MILP with the selected SAGE acceleration inequality family.
+40
+=====PAGE 41
+Published in Transactions on Machine Learning Research (10/2026)
+E.11 Primal-Dual Integral (PDI) Trajectories for Representative TSP Instances
+Fig. 8 reports gap trajectories, and Fig. 9 reports solver best bounds. Fig. 10 complements both views by
+plotting the PDI, a cumulative metric that rewards closing the gap early and penalizes every second the
+gap remains open. 1 As before, the blue curve shows the baseline MILP. The orange curve adds the selected
+SAGE acceleration inequality family. Across all four cases, the model augmented by SAGE reduces the
+total PDI by roughly 75− 95%, showing that acceleration inequality families can improve search progress
+relative to the baseline.
+0
+50
+100
+150
+200
+250
+300
+optimal
+@ 891 s
+gr202
+0
+50
+100
+150
+200
+kroB150
+0 500 1000 1500 2000
+0
+100
+200
+300
+400
+kroA200
+0 500 1000 1500 2000
+0
+20
+40
+60
+80
+100
+optimal
+@ 798 s
+kroD100
+Time (seconds)
+Primal-dual integral  ( ↓  better)
+Baseline Optimality reachedSAGE better Baseline + SAGE
+Figure 10: PDI trajectories for the same four TSPLIB instances used in Figs. 8-9. Lower curves are better.
+Orange: baseline + selected SAGE acceleration inequality family. Blue: baseline MILP.
+E.12 Failure Analysis: MCND Cases with Slight Gap Increase
+In a small number of MCND instances, the selected acceleration inequality family does not help. Fig. 11
+shows four such cases. The gap curves have similar shapes, but the model with the selected acceleration
+inequality family stays slightly higher for most of the horizon. This indicates that the larger model can
+slightly slow gap reduction on some instances.
+F Benchmark MILP Problems and Selected SAGE Families
+Table 20 reports the scale of the seven main held-out benchmark sets. For each of these benchmarks, we show
+the number of test instances and the mean and standard deviation of the variable and constraint counts after
+model construction. The selected acceleration inequality families below show the symbolic output of SAGE:
+on mature benchmarks they sometimes recover expert strengthening structure, while on less standard models
+they can produce more specialized families tied to the formulation.
+Table 21 reports the corresponding per-instance scale for the synthetic sources used to form Dimp and Dadm.
+For a given problem, Dimp and Dadm are drawn from the same generator distribution, so their per-instance
+scale distribution is the same. The default diﬀerence is only cardinality.
+1PDI is the time integral of the optimality gap, hence lower curves are better and an earlier ﬂat curve indicates faster
+convergence.
+41
+=====PAGE 42
+Published in Transactions on Machine Learning Research (10/2026)
+0.0
+0.2
+0.4
+0.6
+0.8
+R-r18.9.dow R-r15.6.dow
+0 500 1000 1500 20000.0
+0.2
+0.4
+0.6
+0.8
+R-r15.3.dow
+0 500 1000 1500 2000
+R-r13.9.dow
+Time (seconds)
+MIP gap  ( ↓  better)
+Baseline Baseline + SAGE
+Figure 11: Gap trajectories for four MCND instances where the selected acceleration inequality family
+slightly hurts the gap ( R-r18.9.dow, R-r15.6.dow, R-r15.3.dow, and R-r13.9.dow). Orange: baseline
+MILP augmented with the selected SAGE acceleration inequality family. Blue: baseline MILP.
+Table 20: Scale of held out benchmarks before solver presolve. Variable and constraint counts are reported
+as mean± sample standard deviation for the baseline formulations and exclude the SAGE families.
+Benchmark # Instances Variables Constraints
+TSP 54 15821.65 ± 15593.23 15931 .00 ± 15655.59
+MCND 81 24991.89 ± 17962.83 2485.22 ± 1330.64
+CWLP 36 34398.00 ± 47121.26 420.22 ± 487.64
+JSSP 80 21382.25 ± 31271.97 42046 .88 ± 62013.04
+PDPTW 165 11090.00 ± 0.00 4565.00 ± 0.00
+IMO6 34 20759.50 ± 22078.88 7524.50 ± 7842.23
+SHUC 56 276709.71 ± 147182.35 369301 .00 ± 194012.45
+F.1 Traveling Salesman Problem
+Compact MILP formulation for TSP .
+
+
+
+min
+∑
+(i,j)∈A
+cij xij
+s.t.
+∑
+j∈V \{i}
+xij = 1 ∀i ∈ V
+∑
+i∈V \{j}
+xij = 1 ∀j ∈ V
+ui − uj + n xij ≤ n − 1 ∀i, j ∈ V \ {1}, i ⁄= j
+xij ∈ { 0, 1} ∀(i, j) ∈ A
+1 ≤ ui ≤ n ∀i ∈ V, u 1 = 1
+(MTZ)
+Notation glossary .
+• V (set): cities to be visited (index i, j).
+• A⊆ V× V (set): directed arcs (i, j) that can be used.
+• cij (parameter): travel cost from city i to city j.
+• n =|V| (parameter): number of cities.
+42
+=====PAGE 43
+Published in Transactions on Machine Learning Research (10/2026)
+Table 21: Synthetic development source scale for Dimp and Dadm. Variable and constraint counts are
+reported as mean ± population standard deviation over the size pool of each generator.
+Synthetic source for Dimp / Dadm Variables Constraints
+TSP synthetic 16737.80 ± 15413.50 16852 .61 ± 15473.23
+MCND synthetic 24988.19 ± 17868.66 2485 .22 ± 1322.35
+CWLP synthetic 19690.59 ± 31363.09 420 .22 ± 449.19
+JSSP synthetic 21382.25 ± 31075.91 42046 .88 ± 61624.24
+PDPTW synthetic 8645.00 ± 1038.60 3627 .50 ± 548.92
+IMO6 synthetic 41740.75 ± 44521.34 14863 .25 ± 15606.55
+SHUC synthetic 48944.00 ± 30308.70 65436 .33 ± 40031.25
+• xij∈{ 0, 1} (variable): equals 1 iﬀ the tour goes directly from city i to city j.
+• ui∈ [1, n] (variable): MTZ position of city i in the tour. u1 is ﬁxed to 1 to anchor the numbering.
+The acceleration inequality family in Eq. ( SAGE-TSP) combines short-cycle elimination, a lifted Desrochers–
+Laporte variant of MTZ ordering, and depot-anchored envelope bounds on the MTZ position variables. This
+acceleration inequality family had the highest inequality impact score selected by SAGE under our gap-
+reduction metric.
+Selected SAGE acceleration inequality family .
+
+
+
+xij + xji ≤ 1 ∀i, j ∈ V, i < j
+x1i + xi1 + x1j + xj1 + xij + xji ≤ 2 ∀i, j ∈ V \ {1}, i < j
+ui − uj + (n − 1) xij + (n − 3) xji ≤ n − 2 ∀i, j ∈ V \ {1}, i ⁄= j
+ui ≥ 3 − x1i + (n − 3) xi1 ∀i ∈ V \ {1}
+ui ≤ (n − 1) + xi1 − (n − 3) x1i ∀i ∈ V \ {1}
+(SAGE-TSP)
+Benchmark sizes. We considered 54 TSPLIB instances with n < 250 cities.
+F.2 Multi-Commodity Network Design (MCND)
+The MCND problem involves selecting a set of network links and assigning multiple ﬂow demands (commodi-
+ties) at minimal cost. Each commodity must be routed from its source to destination without exceeding
+link capacities, and activating a link incurs a ﬁxed cost. The MCND problem is an NP-hard combinatorial
+problem Gendron et al. (1999) that can be formulated as an MILP. We used a public set of MCND instances
+(group R from the CommaLAB dataset) CommaLAB (2021), which provides a range of network sizes, cost
+structures, and capacity settings. We used the MILP formulation in Eq. ( MCND).
+Compact MILP formulation for MCND.
+
+
+
+min
+∑
+(i,j)∈A
+∑
+k∈K
+cij xijk +
+∑
+(i,j)∈A
+fij yij
+s.t.
+∑
+j:(i,j)∈A
+xijk = dk ∀k ∈ K, i = Ok
+∑
+j:(j,i)∈A
+xjik = dk ∀k ∈ K, i = Dk
+∑
+j:(i,j)∈A
+xijk −
+∑
+j:(j,i)∈A
+xjik = 0 ∀k ∈ K, i ∈ N \ {Ok, Dk}
+∑
+k∈K
+xijk ≤ uij yij ∀(i, j) ∈ A
+xijk ≥ 0 ∀(i, j) ∈ A, k ∈ K
+yij ∈ { 0, 1} ∀(i, j) ∈ A
+(MCND)
+43
+=====PAGE 44
+Published in Transactions on Machine Learning Research (10/2026)
+Notation glossary .
+• N (set): all network nodes (index i).
+• A⊆ N× N (set): candidate directed arcs (i, j).
+• K (set): commodities to be routed (index k).
+• Ok / Dk (nodes): origin and destination of commodity k.
+• dk (parameter): demand (quantity) of commodity k that must be shipped from Ok to Dk.
+• cij (parameter): unit transportation cost on arc (i, j).
+• fij (parameter): ﬁxed cost to activate arc (i, j).
+• uij (parameter): capacity of arc (i, j).
+• xijk≥ 0 (variable): ﬂow of commodity k on arc (i, j).
+• yij∈{ 0, 1} (variable): equals 1 iﬀ arc (i, j) is activated.
+Selected SAGE acceleration inequality family. LetIMCND be the ﬁnite set of generated pairs (S, B)
+used in the static augmentation. Each pair has S⊆ N and B⊆ K(S). The set S ranges over concentric
+breadth-ﬁrst search zones expanded from commodity origins. The bundles B are sampled small bundles in
+K(S). ∑
+(i,j)∈δ+ (S)
+min{uij , D B } yij ≥ DB ∀(S, B) ∈ I MCND
+∑
+(i,j)∈δ+ (S)
+yij ≥ qS,B ∀(S, B) ∈ I MCND
+(SAGE-MCND)
+Here, for each generated pair (S, B)∈I MCND, δ+(S) :={(i, j)∈ A : i∈ S, j /∈ S} denotes the arcs leaving
+S, and K(S) :={k∈ K : Ok∈ S, D k /∈ S} are the commodities that must cross this cut. For a generated
+bundle B, let DB := ∑ k∈B dk. The ﬁrst row in Eq. ( SAGE-MCND) is a knapsack-cover variant of the
+standard graph cut-set capacity inequality. The truncation min{uij, DB} prevents the LP relaxation from
+satisfying the capacity constraint using tiny fractional yij on very high-capacity arcs. The second row is a
+cardinality companion, where qS,B is the smallest integer such that the sum of the qS,B largest capacities in
+δ+(S) reaches DB. These rows have the same form as the full cut-set family over all S⊆ N and B⊆ K(S).
+The MILP receives only the ﬁnite generated subset IMCND.
+Benchmark sizes. We used the group R instances r10 to r18 from the CommaLAB dataset ( 81 instances),
+which cover diverse network topologies and demand settings. Each instance is identiﬁed as rx.y, where x
+determines the network size and number of commodities, and y encodes the ﬁxed cost and capacity regime.
+The following table summarizes the key characteristics of the x conﬁgurations used in our benchmark dataset.
+x # Nodes # Arcs # Commodities
+10-12 20 120 40-200
+13-15 20 220 40-200
+16-18 20 314-318 40-200
+The second index y in rx.y controls the ﬁxed cost and capacity setting. Higher ﬁxed costs increase the
+relative importance of arc selection costs, while higher capacities relax arc ﬂow constraints.
+F.3 Capacitated Warehouse Location Problem (CWLP)
+The CWLP is an NP-hard combinatorial optimization problem, formulated as an MILP Beasley (1988). It
+involves selecting a subset of candidate warehouse locations to open and assigning each customer to one
+open warehouse. The problem has capacity constraints at each facility, with the goal of minimizing total
+ﬁxed opening and transportation costs. We used a public set Beasley (1990) of CWLP instances. For our
+experiments, we use the formulation in Eq. ( CWLP).
+44
+=====PAGE 45
+Published in Transactions on Machine Learning Research (10/2026)
+Compact MILP formulation.
+
+
+
+min
+∑
+j∈J
+fj yj +
+∑
+i∈I
+∑
+j∈J
+cij xij
+s.t.
+∑
+j∈J
+xij = 1 ∀i ∈ I (each customer is assigned)
+∑
+i∈I
+di xij ≤ uj yj ∀j ∈ J (capacity)
+xij ∈ { 0, 1} ∀i ∈ I, j ∈ J
+yj ∈ { 0, 1} ∀j ∈ J
+(CWLP)
+Glossary of notation.
+• I (index i): set of customers.
+• J (index j): set of candidate warehouses.
+• di: demand of customer i.
+• uj: capacity of warehouse j.
+• fj: ﬁxed cost to open warehouse j.
+• cij: total transportation cost incurred if all of customer i’s demand is served by warehouse j (so cij
+already accounts for di).
+• yj∈{ 0, 1}: decision variable that equals 1 iﬀ warehouse j is opened (0 otherwise).
+• xij∈{ 0, 1}: decision variable that equals 1 iﬀ customer i is assigned to warehouse j (0 otherwise).
+Selected SAGE acceleration inequality family . The selected CWLP acceleration inequality family
+found by SAGE is a hybrid of global bin-packing bounds and local lifted capacity covers. It combines
+(i) global slot count lower bounds (at multiple demand thresholds) and (ii) per warehouse clique/cover
+inequalities that limit how many large customers can be assigned to a single facility, together with strong
+links between assignment and opening.
+
+
+
+∑
+j∈J
+uj yj ≥
+∑
+i∈I
+di
+∑
+j∈J
+⌊ uj
+v
+⌋
+yj ≥
+⏐⏐{i ∈ I : di ≥ v} ⏐⏐ ∀v ∈ V
+xij ≤ yj ∀i ∈ I, ∀j ∈ J
+xij ≤ 0 ∀i ∈ I, ∀j ∈ J with di > u j
+∑
+i∈Cj
+xij ≤ yj ∀j ∈ J
+∑
+i∈I:di >uj /3
+xij ≤ 2 yj ∀j ∈ J
+(SAGE-CWLP)
+Here,V⊆{ di : i∈ I} is a small set of demand thresholds (we use up to the 8 largest distinct demand values
+in each instance) to instantiate the global slot count bounds. For the local clique inequality, Cj⊆ I is a
+lifted conﬂict set constructed by starting from {i∈ I : di > u j/2} and sequentially adding smaller customers
+that still conﬂict with every customer already in the set (so di + di′ > u j for all distinct i, i′∈ Cj).
+Benchmark sizes. We use the CWLP instances from the OR-Library benchmark. Eight instances have
+16 facility locations and 50 customers, eight have 25 facility locations and 50 customers, eight have 50 facility
+45
+=====PAGE 46
+Published in Transactions on Machine Learning Research (10/2026)
+locations and 50 customers, and twelve have 100 facility locations and 1,000 customers. The corresponding
+baseline models before presolve have 816, 1,275, 2,550, and 100,100 variables and 66, 75, 100, and 1,100
+constraints, in the same order. These counts exclude the selected SAGE family.
+F.4 Job Shop Scheduling Problem (JSSP)
+The JSSP is a classic NP-hard combinatorial optimization problem Garey et al. (1976) and admits a MILP
+formulation Manne (1960). It involves scheduling a set of jobs on multiple machines, where each job has
+a sequence of operations that must be processed in a speciﬁed order on speciﬁed machines. The objective
+is to minimize the makespan (the completion time of the last operation), while ensuring that each machine
+handles at most one operation at a time. We use the formulation in Eq. ( JSSP) and test SAGE on the
+widely used Taillard benchmark Taillard (1993).
+Compact MILP formulation.
+
+
+
+min Cmax
+s.t. Sj,k+1 ≥ Sj,k + pj,k ∀j, k = 1 , . . . , nmach − 1
+Sj1 ,k1 + pj1 ,k1 ≤
+Sj2 ,k2 + M (1 − yj1 ,k1 ,j2 ,k2 ) ∀
+(
+(j1, k1), (j2, k2)
+)
+∈ E
+Sj2 ,k2 + pj2 ,k2 ≤
+Sj1 ,k1 + M y j1 ,k1 ,j2 ,k2 ∀
+(
+(j1, k1), (j2, k2)
+)
+∈ E
+Cmax ≥ Sj,nmach + pj,nmach ∀j
+Sj,k ≥ 0 ∀j, k
+yj1 ,k1 ,j2 ,k2 ∈ { 0, 1} ∀
+(
+(j1, k1), (j2, k2)
+)
+∈ E
+(JSSP)
+V ariable and set glossary .
+• nmach (parameter): number of machines (and operations per job), with k∈{ 1, . . . , nmach}.
+• m∈{ 1, . . . , nmach} (index): machine index.
+• O (set): set of all operations (j, k).
+• Om (set): set of operations processed on machine m.
+• Sj,k∈ R≥0 (variable): start time of the k-th operation of job j.
+• pj,k (parameter): processing time of operation (j, k).
+• E (set): ordered pairs
+(
+(j1, k1), (j2, k2)
+)
+of distinct operations that require the same machine. For every
+such pair, exactly one of the two order enforcing inequalities becomes active.
+• yj1,k1,j2,k2∈{ 0, 1}: binary variable that equals 1 if operation (j1, k1) is scheduled before (j2, k2) on their
+shared machine, 0 otherwise.
+• Cmax∈ R≥0: continuous makespan (completion time of the last operation). The objective minimizes this
+value.
+• M = ∑ j,k pj,k: the total processing time, which is a valid schedule horizon and deactivates the unselected
+sequencing inequality.
+46
+=====PAGE 47
+Published in Transactions on Machine Learning Research (10/2026)
+Selected SAGE acceleration inequality family .
+Cmax ≥ 1 nmach ∑
+(j,k)∈O
+pj,k
+Cmax ≥ CPm ∀m ∈ { 1, . . . , nmach}
+Cmax ≥
+nmach∑
+k=1
+pj,k ∀j
+(SAGE-JSSP)
+This hybrid family combines three lower bounds on the makespan:
+• A verage load bound: 1 nmach ∑ (j,k)∈O pj,k represents the average total processing time per machine, so the makespan is at least the average workload.
+• Machine-level critical path bound (CPm): For each machine m, let Om be the set of operations
+processed on m. For any operation (j, k), deﬁne the job preﬁx (head) and job suﬃx (tail)
+hj,k :=
+∑
+t<k
+pj,t, t j,k :=
+∑
+t>k
+pj,t.
+Then we take
+CPm :=
+∑
+(j,k)∈Om
+pj,k + min (j,k)∈Om hj,k + min (j,k)∈Om tj,k,
+which lower bounds the completion time of any schedule by accounting for the total load on m plus the
+earliest possible release (head) of the ﬁrst operation on m and the smallest remaining tail after the last
+operation on m.
+• Longest job bound : maxj
+∑
+k pj,k lower bounds the makespan by the total processing time of the
+longest job chain.
+These three bounds together use machine workloads and job chain precedence (heads/tails). The hybrid
+acceleration inequality family was selected by SAGE based on optimality gap reduction.
+Table 17 counts the family as instantiated on each test instance. The instantiated form strengthens the
+machine bound with two continuous variables in [0, 1] for every operation, which indicate whether the
+operation is ﬁrst or last on its machine. On each machine whose load is at least 85% of the largest machine
+load, it adds the rows that link these indicators to the sequencing variables and the start times, and a bound
+that adds the head of the ﬁrst operation and the tail of the last operation to the machine load. These
+variables and rows give the JSSP counts in the table.
+Benchmark sizes. We evaluated SAGE on the Taillard JSSP benchmark ( ta01 to ta80, 80 instances).
+This includes instances with the following job and machine counts:
+• 15 jobs× 15 machines (e.g., ta01-ta10),
+• 20 jobs× 15 machines (e.g., ta11-ta20),
+• 20 jobs× 20 machines (e.g., ta21-ta30),
+• 30 jobs× 15 machines (e.g., ta31-ta40),
+• 30 jobs× 20 machines (e.g., ta41-ta50),
+• 50 jobs× 15 machines (e.g., ta51-ta60),
+• 50 jobs× 20 machines (e.g., ta61-ta70),
+• 100 jobs× 20 machines (e.g., ta71-ta80).
+These instances are widely used in the literature to assess scheduling algorithms on problems with diﬀerent
+sizes and diﬃculty levels.
+47
+=====PAGE 48
+Published in Transactions on Machine Learning Research (10/2026)
+F.5 Pickup and Delivery Problem with Time Windows (PDPTW)
+The PDPTW is a vehicle routing problem in which each request consists of a pickup location and a delivery
+location that must be served in precedence order, subject to time window and vehicle capacity constraints.
+The objective is to route vehicles to serve all requests while minimizing total travel cost. PDPTW is NP-hard
+and admits MILP formulations. It comes from practice and has many constraints, and some benchmark
+instances used in our suite are included in MIPLIB Koch et al. (2011). We use the truckload PDPTW
+instances derived from a real-world drayage case at the Port of Rotterdam Srour et al. (2010). We obtained
+the compressed MPS ﬁles from the MIPLIB 2010 contribution page Srour et al. (2010). We convert them into
+our parameterized model by reading each MPS ﬁle in Gurobi and recovering (K, N, dk 0i, dij, dk iH , vk, τ − i , τ + i )
+from the instance coeﬃcients.
+Compact MILP formulation. We use the MILP formulation of Srour et al. (2010), which models trucks
+and jobs as nodes in a complete directed graph and permits explicit job rejection via self-loops xK+i,K+i = 1
+with penalty dii:
+
+
+
+min
+K∑
+k=1
+N∑
+i=1
+dk 0i xk,K+i +
+N∑
+i=1
+N∑
+j=1
+dij xK+i,K+j +
+N∑
+i=1
+K∑
+k=1
+dk iH xK+i,k
+s.t.
+K+N∑
+v=1
+xuv = 1 ∀u = 1 , . . . , K + N
+K+N∑
+v=1
+xvu = 1 ∀u = 1 , . . . , K + N
+δi −
+K∑
+k=1
+(dk 0i + vk) xk,K+i ≥ 0 ∀i = 1 , . . . , N
+δj − δi − M x K+i,K+j + (dii + dij ) xK+i,K+i ≥ dii + dij − M ∀i, j = 1 , . . . , N
+τ − i ≤ δi ≤ τ + i ∀i = 1 , . . . , N
+δi ∈ R≥0 ∀i = 1 , . . . , N
+xuv ∈ { 0, 1} ∀u, v = 1 , . . . , K + N
+(PDPTW)
+Notation glossary .
+• K (parameter): number of trucks/vehicles in the ﬂeet (truck nodes k∈{ 1, . . . , K}).
+• N (parameter): number of pickup and delivery demands/jobs (job nodes K + i for i∈{ 1, . . . , N}).
+• u, v∈{ 1, . . . , K + N} (indices): nodes in the complete directed graph.
+• dij (parameter): travel time from demand i’s return terminal to demand j’s pickup terminal. For i = j,
+dii is the loaded time of job i and is used as the rejection penalty.
+• dk 0i (parameter): travel time from the home terminal of truck k to demand i’s pickup terminal.
+• dk iH (parameter): travel time from demand i’s return terminal to the home terminal of truck k.
+• vk (parameter): time at which truck k becomes available.
+• τ − i , τ + i (parameters): earliest/latest permissible arrival times at demand i’s pickup terminal.
+• M (parameter): big- M constant that deactivates the sequencing inequality on an unselected arc. All
+source MPS ﬁles Srour et al. (2010) use M = 60,000, which we retain in both formulations.
+• xuv∈{ 0, 1} (variable): equals 1 iﬀ arc (u, v) is selected in the routing cycle cover.
+• δi∈ R≥0 (variable): arrival time at demand i’s pickup terminal.
+48
+=====PAGE 49
+Published in Transactions on Machine Learning Research (10/2026)
+Selected SAGE acceleration inequality family . The selected PDPTW acceleration inequality family
+adds four time-window inequalities. Let
+ESTi := max{τ − i , min k (vk + dk 0i)}
+and
+A− :={(i, j) : EST i + dii + dij > τ + j}.
+We then add the following four inequalities:
+
+
+
+xK+i,K+j ≤ 0 ∀(i, j) ∈ A −
+xK+i,K+j + xK+j,K+i + xK+i,K+i ≤ 1 ∀(i, j) ∈ F 2
+∑
+i∈C
+xK+i,K+i ≥ | C| − | K(C)| ∀C ∈ C
+xK+i,K+k + xK+k,K+j + xK+k,K+k ≤ 1 ∀(i, k, j) ∈ Q
+(SAGE-PDPTW)
+Here,F2 is the set of mutually feasible pairs:
+F2 :={(i, j) : i⁄= j, (i, j) /∈A −, (j, i) /∈A −}.
+C is the set of cliques with |C| >|K(C)| in the conﬂict graph that connects pairs with both directions
+infeasible, where
+K(C) :={k∈{ 1, . . . , K} :∃i∈ C s.t. vk + dk 0i≤ τ + i}
+is the set of trucks that can reach at least one job in C by its latest pickup time. Finally,
+Q :={(i, k, j) : ( i, k) /∈A −, (k, j) /∈A −, max{ESTk, ESTi + dii + dik} + dkk + dkj > τ + j}.
+Benchmark sizes. We use the ﬁve MIPLIB truckload PDPTW groups R0, R25, R50, R75, and R100 Srour
+et al. (2010). Each group contains 33 instances (one per day) for a total of 165 instances. Each instance has
+K = 40 trucks and N = 65 jobs. The groups diﬀer by the fraction of jobs that are released after the start
+of the day (0%, 25%, 50%, 75%, 100%, respectively).
+F.6 International Mathematical Olympiad 2025 Problem 6 (IMO6)
+This benchmark is based on IMO 2025 Problem 6: given an N× N grid of unit squares, place axis-aligned
+rectangular tiles (no overlaps) so that each row and each column contains exactly one uncovered unit square
+(a hole). The objective is to minimize the number of tiles used International Mathematical Olympiad (2025).
+We include IMO6 as a newly formulated MILP benchmark (derived from a math olympiad problem), so
+it is not drawn from standard IP benchmark literature and LLMs are unlikely to have seen established
+formulation ideas for it. We model the problem by deﬁning ﬁxed-length strips and tracking their vertical
+continuation over a 2D board. The following IP model matches the Pyomo code used in our experiments.
+Compact MILP formulation. Let R = {1, . . . , N} be the rows, C = {1, . . . , N} the columns, and
+I ={(a, b)∈ C× C : a≤ b} the set of horizontal strips. Binary variables: hij indicate the hole position, and
+xab i indicates that strip (a, b) is active on row i. The variables sab i , t ab i ∈{ 0, 1} mark the start and end rows
+of strip (a, b). The objective counts rectangles, because each rectangle contributes exactly one start. The
+ﬂow equalities ensure each active strip (a, b) has one start and one end, so summation over start variables
+49
+=====PAGE 50
+Published in Transactions on Machine Learning Research (10/2026)
+equals the number of rectangles.
+
+
+
+min
+∑
+i∈R
+∑
+(a,b)∈I
+sab i
+s.t.
+∑
+j∈C
+hij = 1 ∀i ∈ R
+(one hole per row)
+∑
+i∈R
+hij = 1 ∀j ∈ C
+(one hole per column)
+∑
+(a,b)∈I
+a≤j≤b
+xab i + hij = 1 ∀i ∈ R, ∀j ∈ C
+(each cell is covered by exactly one strip or a hole)
+xab 1 − sab 1 = 0 ∀(a, b) ∈ I
+(top ﬂow)
+xab i − xab i−1 − sab i + tab i−1 = 0 ∀i = 2 , . . . , N, ∀(a, b) ∈ I
+(mid ﬂow)
+xab N − tab N = 0 ∀(a, b) ∈ I
+(bottom ﬂow)
+hij ∈ { 0, 1} ∀i ∈ R, ∀j ∈ C
+xab i , s ab i , t ab i ∈ { 0, 1} ∀i ∈ R, ∀(a, b) ∈ I
+(RT-2DFlow)
+Notation glossary .
+• R ={1, . . . , N}, C ={1, . . . , N}: row and column index sets ( i∈ R, j∈ C).
+• I ={(a, b)∈ C 2 : a≤ b}: all contiguous column intervals (index (a, b)).
+• hij∈{ 0, 1}: = 1 iﬀ (i, j) is the unique hole in row i and in column j.
+• xab i ∈{ 0, 1}: = 1 iﬀ on row i the columns a, a+1, . . . , b are covered by the same tile and strip (a, b) is
+active.
+• sab i , tab i ∈{ 0, 1}: start/end ﬂags of the vertical strip for interval (a, b) at row i. The number of rectangles
+equals ∑ i,(a,b) sab i .
+Selected SAGE acceleration inequality family . The selected IMO6 acceleration inequality family uses
+both uniqueness conditions on holes. It forbids an active strip from containing the row hole, tightens row
+activity to the number of connected covered components in the row, and enforces mandatory new starts
+when a hole in the previous row is vacated. The last two inequalities also restrict the new start to the same
+50
+=====PAGE 51
+Published in Transactions on Machine Learning Research (10/2026)
+side of the new hole as the covered column.
+
+
+
+xab i +
+b∑
+ℓ=a
+hiℓ ≤ 1 ∀i ∈ R, ∀(a, b) ∈ I
+∑
+(a,b)∈I
+xab i ≥ 2 − hi1 − hiN ∀i ∈ R
+∑
+(a,b)∈I
+sab i ≥ 1 ∀i ∈ { 2, . . . , N}
+∑
+(a,b)∈I
+a≤j≤b
+sab i ≥ hi−1,j ∀i ∈ { 2, . . . , N}, ∀j ∈ C
+∑
+(a,b)∈I
+a≤j≤b<k
+sab i ≥ ∑
+(a,b)∈I
+a≤j
+b≥k
+xab i−1 + hik − 1 ∀i ∈ { 2, . . . , N}, ∀j, k ∈ C, j < k
+∑
+(a,b)∈I
+k<a≤j≤b
+sab i ≥ ∑
+(a,b)∈I
+a≤k
+b≥j
+xab i−1 + hik − 1 ∀i ∈ { 2, . . . , N}, ∀j, k ∈ C, j > k
+(SAGE-RT-Disrupt)
+The ﬁrst inequality prevents any active strip from crossing the row’s unique hole. The second inequality
+counts row components: if the hole is in an interior column, the covered cells split into two disconnected
+intervals. Otherwise they form one interval. The third inequality follows from column uniqueness: the
+column that was a hole in row i−1 must be covered in row i, so at least one rectangle starts in every row
+after the ﬁrst. The fourth tightens the vacated-column inequality to require a start covering the exact column
+vacated by the previous row’s hole. The ﬁnal two inequalities handle intervals broken by the new hole: if
+the new hole at k breaks an interval from row i−1, the new start covering j cannot cross k. Together with
+the top-ﬂow equality, these inequalities give the LP relaxation the objective lower bound ∑ i,(a,b) sab i ≥ N .
+Benchmark sizes. We generate one instance per N∈{ 3, . . . ,46} (44 instances total). We use 10 instances
+as the development pool for SAGE. In this pool, Dimp contains all 10 instances and Dadm is a 2-instance
+subset used for admissibility screening. The instances with N∈{ 3, . . . ,36} form the test set.
+F.7 Sub-Hour Unit Commitment (SHUC)
+The SHUC benchmark is a unit commitment problem with a horizon under one hour that decides generator
+commitment (on/oﬀ) and dispatch levels to meet demand and reserve. SHUC is a problem motivated by
+practice with many constraints. Some benchmark instances used in our suite are included in MIPLIB Koch
+et al. (2011). We use the PGLib-UC v19.08 JavaScript Object Notation (JSON) benchmark Power Grid Lib
+(2019) and follow its reference formulation with piecewise production costs, startup categories, ramping limits,
+and minimum up and down times Knueven et al. (2020). For source attribution, we use the recommended
+documents for the ca cases ( Knueven et al. , 2020), the ferc cases ( Knueven et al. , 2020; Krall et al. , 2012),
+and the rts_gmlc cases ( Barrows et al. , 2019).
+51
+=====PAGE 52
+Published in Transactions on Machine Learning Research (10/2026)
+Compact MILP formulation.
+
+
+
+min
+∑
+g∈G
+∑
+t∈T
+(
+cg,t + Cg,1 ug,t
+)
++
+∑
+g∈G
+∑
+s∈Sg
+∑
+t∈T
+Csu g,s dg,s,t
+s.t.
+∑
+g∈G
+(
+pg,t + P min g ug,t ) + ∑
+w∈W
+pw w,t = Lt ∀t ∈ T
+∑
+g∈G
+rg,t ≥ Rt ∀t ∈ T
+ug,t − ug,t−1 = vg,t − wg,t ∀g ∈ G, t = 2 , . . . , T
+t∑
+τ =t−Ug +1
+vg,τ ≤ ug,t ∀g ∈ G, t ≥ Ug
+t∑
+τ =t−Dg +1
+wg,τ ≤ 1 − ug,t ∀g ∈ G, t ≥ Dg
+vg,t =
+∑
+s∈Sg
+dg,s,t ∀g ∈ G, t ∈ T
+dg,s,t ≤
+ℓg,s+1 −1 ∑
+i=ℓg,s
+wg,t−i ∀g ∈ G, s < |Sg|, t ≥ ℓg,s+1
+ug,t ≥ MRg ∀g ∈ G, t ∈ T
+pg,t + rg,t ≤ (P max g − P min g ) ug,t − max(P max g − SUg, 0) vg,t ∀g ∈ G, t ∈ T
+pg,t + rg,t ≤ (P max g − P min g ) ug,t − max(P max g − SDg, 0) wg,t+1 ∀g ∈ G, t < T
+pg,t + rg,t − pg,t−1 ≤ RUg ∀g ∈ G, t = 2 , . . . , T
+pg,t−1 − pg,t ≤ RDg ∀g ∈ G, t = 2 , . . . , T
+pg,t =
+∑
+l∈Lg
+(Pg,l − Pg,1) λg,l,t ∀g ∈ G, t ∈ T
+cg,t =
+∑
+l∈Lg
+(Cg,l − Cg,1) λg,l,t ∀g ∈ G, t ∈ T
+ug,t =
+∑
+l∈Lg
+λg,l,t ∀g ∈ G, t ∈ T
+P w,min w,t ≤ pw w,t ≤ P w,max w,t ∀w ∈ W, t ∈ T
+ug,t, vg,t, wg,t, dg,s,t ∈ { 0, 1}, λ g,l,t ∈ [0, 1]
+pg,t, rg,t, cg,t, pw w,t ≥ 0
+(SHUC)
+We also enforce initial on status, initial output, and remaining up or down time at t = 1 using the dataset
+ﬁelds unit_on_t0, power_output_t0, time_up_t0, and time_down_t0, matching the PGLib-UC reference
+model.
+Notation glossary .
+• T ={1, . . . , T}: time periods (index t).
+• G: thermal generators, W : renewable generators.
+• Sg: startup categories for generator g, with lag ℓg,s and cost C su g,s.
+• Lg: piecewise production points (Pg,l, Cg,l), with Cg,1 the ﬁxed on cost per period.
+52
+=====PAGE 53
+Published in Transactions on Machine Learning Research (10/2026)
+• Lt, Rt: demand and reserve requirements at time t.
+• P min g , P max g : minimum and maximum thermal output, and P w,min w,t , P w,max w,t are renewable bounds.
+• RUg, RDg: ramp up and ramp down limits, and SUg, SDg: startup and shutdown ramp limits.
+• Ug, Dg: minimum up and minimum down times, and MRg: must run ﬂag.
+• ug,t: on status, vg,t: startup, and wg,t: shutdown.
+• pg,t: thermal output above minimum, rg,t: spinning reserve, and pw w,t: renewable output.
+• dg,s,t: startup category selection, λg,l,t: piecewise weights, and cg,t: variable production cost above the
+base cost.
+Selected SAGE acceleration inequality family .
+
+
+
+bg,t ≤ vg,t ∀g ∈ G, t < T
+bg,t ≤ wg,t+1 ∀g ∈ G, t < T
+bg,t ≥ vg,t + wg,t+1 − 1 ∀g ∈ G, t < T
+P g,t ≤ P max g ug,t − max(P max g − SUg, 0) vg,t ∀g ∈ G, t ∈ T
+P g,t ≤ P max g ug,t − max(P max g − SDg, 0) wg,t+1 ∀g ∈ G, t < T
+P g,t ≤ P max g ug,t − max(P max g − SUg, 0) vg,t − max(P max g − SDg, 0) wg,t+1 ∀g ∈ G, t < T
++ min
+(
+max(P max g − SUg, 0), max(P max g − SDg, 0) ) bg,t
+P g,t ≤ P min g ug,t + pg,t−1 + RUg + (P max g − P min g ) (1 − ug,t−1) ∀g ∈ G, t = 2 , . . . , T
+P g,t ≤ P min g ug,t + (P max g − P min g ) ug,t−1 − max(P max g − SUg, 0) vg,t−1 + RUg ∀g ∈ G, t = 2 , . . . , T
+P g,t ≤ P min g ug,t + (P max g − P min g ) ug,t−1 − max(P max g − SDg, 0) wg,t + RUg ∀g ∈ G, t = 2 , . . . , T
+Lt −
+∑
+w∈W
+pw w,t + Rt ≤ ∑
+g∈G
+P g,t ∀t ∈ T
+(SAGE-SHUC)
+This acceleration inequality family requires that demand minus renewable output plus reserve can be met
+by thermal capacity that is reachable under ramp limits, with derating during startups and shutdowns. We
+also apply the t = 1 form of the ramp reachability bounds using the dataset t0 ﬁelds. Here, P g,t and bg,t are
+auxiliary variables introduced by the selected acceleration inequality family.
+Table 17 counts the family as instantiated on each test instance. Beyond the displayed block, the instantiated
+form adds ramp rows on the actual output that account for the commitment status and the startup and
+shutdown limits, a lower bound on the number of online units in each period, and cover rows that require
+the committed, starting, and stopping units to cover the residual demand and reserve. Section 5.10 proves
+the validity of the displayed block.
+Benchmark sizes. We use all 56 PGLib-UC v19.08 instances: 20 ca, 24 ferc, and 12 rts_gmlc cases.
+Each instance has T = 48 periods, 73 to 978 thermal generators, and 0 to 81 renewable generators. We set
+|Dimp| = 10 and|Dadm| = 2 from our synthetic generator, and use the full 56-instance PGLib-UC benchmark
+as Dt.
+F.8 Reconﬁgurable Network Topology Design (RNTD)
+RNTD installs capacity on undirected links and routes commodities through the resulting network. It limits
+the number of capacity units incident to each node, the number of hops in each route, and the deviation
+from a reference design. One installed capacity variable is shared by ﬂow in both directions of a link.
+Let P be the nodes, E the undirected candidate links, and K the commodities. Commodity k has volume
+wk, source sk, and destination tk. The set Ak contains the directed arcs that can occur in a route of at most
+L links. For each link e ={i, j}, Γe is its ﬁxed cost, χke is its routing cost, ue is the capacity of one installed
+unit, and Ci is the capacity unit limit at node i. The reference design is ˆy, its deviation budget is R, and
+53
+=====PAGE 54
+Published in Transactions on Machine Learning Research (10/2026)
+ymax bounds the units on one link. The variables are commodity ﬂow xkij≥ 0, installed units ye∈ Z≥0,
+and absolute deviation qe≥ 0. Deﬁne bki = wk at sk, bki =−wk at tk, and bki = 0 otherwise. The RNTD
+MILP is
+min
+x,y,q
+∑
+e∈E
+Γeye +
+∑
+k∈K
+∑
+(i,j)∈Ak
+χk,{i,j}xkij (11)
+s.t.
+∑
+j:(i,j)∈Ak
+xkij−
+∑
+j:(j,i)∈Ak
+xkji = bki ∀k∈ K, i ∈ P,
+∑
+k:(i,j)∈Ak
+xkij +
+∑
+k:(j,i)∈Ak
+xkji≤ u{i,j}y{i,j} ∀{i, j}∈ E,
+∑
+e∈δ(i)
+ye≤ Ci ∀i∈ P,
+qe≥ ye− ˆye, q e≥ ˆye− ye ∀e∈ E, ∑
+e∈E
+qe≤ R, 0≤ y{i,j}≤ min{ymax, Ci, Cj} ∀{i, j}∈ E.
+All generated instances use L = 2, so the restricted arc sets enforce the hop limit.
+The selected family combines demand across a node cut with the node capacity limits. For S⊂ P , let δ(S)
+be its cut links, E(S) its internal links, WS the total commodity volume whose source and destination lie
+on opposite sides, and BS =⌈WS/ maxe∈δ(S) ue⌉. For every set with 1≤| S|≤ 2, the family adds
+∑
+e∈δ(S)
+ye≥ BS, (12)
+∑
+e∈E(S)
+ye≤
+⌊ ∑
+i∈S Ci− BS
+2
+⌋
+,
+∑
+e∈E(P \S)
+ye≤
+⌊ ∑
+i∈P \S Ci− BS
+2
+⌋
+.
+The generator samples nodes in a square and uses the complete undirected candidate graph. It samples
+ordered source and destination pairs, volumes, distance based link costs, and one of three routing cost
+proﬁles. Each volume is between 10 and 60, one capacity unit carries 100, and two sampled hubs deﬁne
+a feasible reference design. Node limits equal the incident reference units plus three, and the deviation
+budget is sampled between 0.8 and 1.2 times the total reference capacity. We used independent seeds for 12
+development instances and 44 reserved test instances. The selected family was ﬁxed before any test solve.
+The generator and all instances are released with the code.
+G LLM API Conﬁguration
+G.1 Parameters and token usage
+Table 22 lists the exact parameters used in every call to the three LLM APIs ( deepseek-reasoner,
+google/gemini-3-pro-preview, and gpt-5.1) throughout our SAGE pipeline, together with approximate
+token usage. At the listed prices, the approximate total API cost across the three LLM runs is USD 400.
+H Inequality Impact Score
+This appendix gives the range and the implementation of the inequality impact score deﬁned in Section 4.
+Because gapaug(i)≥ 0, every term satisﬁes d(i)≥− 1, so simp(C)≤ 10e≈ 27.2, with equality only when
+the family closes the gap on every impact assessment instance. A score above 10 indicates a mean gap
+54
+=====PAGE 55
+Published in Transactions on Machine Learning Research (10/2026)
+Table 22: LLM API settings and estimated token costs used for all SAGE experiments. Costs use Jan 2026
+OpenRouter list prices. The Gemini 3 Pro API identiﬁer and pricing follow OpenRouter OpenRouter (2025).
+Parameter DeepSeek Gemini 3 Pro GPT-5.1
+Model deepseek-reasoner google/gemini-3-pro-preview gpt-5.1
+Maximum output tokens 10,000 10,000 10,000
+Temperature 1.0 1.0 1.0
+Frequency penalty 0.0 0.0 0.0
+Presence penalty 0.0 0.0 0.0
+Total input tokens ∼26 M ∼19 M ∼28 M
+Total output tokens ∼13 M ∼14 M ∼17 M
+Total tokens ∼39 M ∼33 M ∼45 M
+Total cost (Jan 2026 pricing) ∼$50 ∼$200 ∼$150
+reduction, and the mean relative gap reduction − ¯d equals ln(simp(C)/10). For example, the best scores of
+17.60 and 19.07 in Appendix C.3 correspond to mean development gap reductions of 56.5% and 64.6%. In
+the implementation, gapaug(i) is the relative gap that Gurobi reports when the work limit is reached. If the
+augmented run ﬁnds no incumbent within the work limit, the solver reports no gap and the instance is left
+out of ¯d.
+55

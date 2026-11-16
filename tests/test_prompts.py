@@ -4,11 +4,13 @@ evolution/prompts.py (conversations built from them, parsing of the LLM reply).
 """
 import inspect
 import os
+import re
 from typing import Dict, List
 
 import pytest
 import yaml
 
+from evolution.evaluator import FitnessMode
 from evolution.individual import Individual
 from evolution.prompts import DEFAULT_VARIANT, Prompts, ReplyFormatError, parse_reply, prompt_variants
 from llm.base import Message
@@ -24,11 +26,13 @@ def load(filename: str) -> Dict[str, str]:
 COMMON: Dict[str, str] = load("common.yaml")
 MUTATIONS: Dict[str, str] = load("mutations.yaml")
 CROSSOVERS: Dict[str, str] = load("crossovers.yaml")
+FITNESS: Dict[str, str] = load("fitness.yaml")
+TSP: Dict[str, str] = {**load(os.path.join("problems", "tsp.yaml")), "evaluation_size": "60 to 100 cities"}
 MODEL_CODE: str = inspect.getsource(create_model)
 
 
 def test_common_has_every_template() -> None:
-    assert set(COMMON) == {"system", "mutation_user", "crossover_user", "retry_user"}
+    assert set(COMMON) == {"system", "mutation_user", "crossover_user", "retry_user", "retry_invalid_user"}
 
 
 def test_operators_match_the_reference() -> None:
@@ -38,7 +42,7 @@ def test_operators_match_the_reference() -> None:
 
 @pytest.mark.parametrize("task", list(MUTATIONS.values()) + list(CROSSOVERS.values()))
 def test_system_prompt_fills_for_every_operator(task: str) -> None:
-    prompt: str = COMMON["system"].format(task=task, model_code=MODEL_CODE)
+    prompt: str = COMMON["system"].format(task=task, model_code=MODEL_CODE, scoring=FITNESS["gap"].format(**TSP), **TSP)
     assert task in prompt and MODEL_CODE in prompt
     assert "{" not in prompt.replace(MODEL_CODE, "")  # no placeholder left unfilled
     assert "Pyomo" not in prompt
@@ -156,6 +160,31 @@ def test_initializer_messages() -> None:
         assert text in user
 
 
+def test_fitness_file_has_one_text_per_fitness_mode() -> None:
+    assert set(FITNESS) == {mode.value for mode in FitnessMode}  # every mode the GA can use
+    assert "LP RELAXATION" in FITNESS["lp"] and "root gap" in FITNESS["lp"]
+    assert "optimality gap" in FITNESS["gap"] and "seeds" in FITNESS["gap"]
+    assert "PROVE optimality" in FITNESS["gap_work"] and "optimality gap" in FITNESS["gap_work"]
+
+
+@pytest.mark.parametrize("mode", [m.value for m in FitnessMode])
+@pytest.mark.parametrize("variant", prompt_variants())
+def test_every_variant_tells_the_llm_its_fitness(variant: str, mode: str) -> None:
+    prompts: Prompts = Prompts(MODEL_CODE, variant=variant, fitness_mode=mode)
+    other: str = "lp" if mode != "lp" else "gap"
+    for messages in [prompts.mutation_messages(op, PARENT1, 1.0) for op in prompts.mutations]:
+        system: str = messages[0]["content"]
+        assert prompts.scoring in system and "{scoring}" not in system
+        assert Prompts(MODEL_CODE, variant=variant, fitness_mode=other).scoring not in system
+    assert ("root gap" in prompts.scoring) == (mode == "lp")
+    assert ("PROVE optimality" in prompts.scoring) == (mode == "gap_work")
+
+
+def test_unknown_fitness_mode_is_refused() -> None:
+    with pytest.raises(ValueError, match="hybrid"):
+        Prompts(MODEL_CODE, fitness_mode="hybrid")
+
+
 @pytest.mark.parametrize("variant", prompt_variants())
 def test_every_variant_fills_without_placeholder(variant: str) -> None:
     prompts: Prompts = Prompts(MODEL_CODE, variant=variant)
@@ -166,6 +195,7 @@ def test_every_variant_fills_without_placeholder(variant: str) -> None:
     for messages in conversations:
         system: str = messages[0]["content"]
         assert MODEL_CODE in system and "{task}" not in system and "{model_code}" not in system
+        assert "{scoring}" not in system and prompts.scoring in system
         assert "IDEA:" in system and "CODE:" in system  # parse_reply's format is still asked
         assert "Best fitness found so far: 4.0" in messages[1]["content"]
     assert "the error" in prompts.retry_message("the error")["content"]
@@ -189,3 +219,86 @@ def test_variants_override_keys_or_whole_files(tmp_path: object) -> None:
     assert prompt_variants(folder) == [DEFAULT_VARIANT, "v"]
     with pytest.raises(FileNotFoundError, match="nope"):
         Prompts(MODEL_CODE, prompts_dir=folder, variant="nope")
+
+
+def test_the_problem_is_described_from_its_own_file() -> None:
+    system: str = Prompts(MODEL_CODE).mutation_messages("Lifted", PARENT1, 1.0)[0]["content"]
+    assert "a MILP model of the Traveling Salesman Problem (TSP), given at the end" in system
+    assert TSP["description"] in system and "60 to 100 cities" in system
+    lp: Prompts = Prompts(MODEL_CODE, fitness_mode="lp")
+    assert "best_known_tour" in lp.scoring and "LARGER instances (60 to 100 cities)" in lp.scoring
+    assert "{" not in system.replace(MODEL_CODE, "")
+
+
+def test_the_llm_is_told_the_sizes_of_its_instance_level() -> None:
+    hard: str = Prompts(MODEL_CODE, instance_level="hard").mutation_messages("Lifted", PARENT1, 1.0)[0]["content"]
+    assert "60 to 200 cities" in hard and "60 to 100 cities" not in hard
+
+
+def test_templates_say_nothing_about_the_tsp() -> None:
+    """Everything problem-specific is in prompts/problems/ (or a variant's problems/)."""
+    for root, _, files in os.walk(parameters.PROMPTS_DIR):
+        if os.path.basename(root) == "problems":
+            continue
+        for name in files:
+            if name.endswith(".yaml"):
+                text: str = "\n".join(line for line in open(os.path.join(root, name)) if not line.lstrip().startswith("#"))
+                for word in ("cities", "city", "tour", "TSP", "MTZ", "salesman"):
+                    assert word not in text.replace("tourna", ""), f"{word!r} in {os.path.join(root, name)}"
+
+
+def test_few_shot_takes_its_examples_from_the_problem() -> None:
+    system: str = Prompts(MODEL_CODE, variant="few_shot").mutation_messages("Lifted", PARENT1, 1.0)[0]["content"]
+    assert "Examples of answers that were REFUSED" in system and "two_cycle" in system
+
+
+def test_a_placeholder_without_value_is_refused(tmp_path: object) -> None:
+    import shutil
+    folder: str = os.path.join(str(tmp_path), "prompts")
+    shutil.copytree(parameters.PROMPTS_DIR, folder)
+    with open(os.path.join(folder, "problems", "tsp.yaml"), "w") as f:
+        f.write("problem: a problem\nsolution: tour\n")  # no description
+    with pytest.raises(ValueError, match="'description' has no value for problem 'tsp'"):
+        Prompts(MODEL_CODE, prompts_dir=folder)
+
+
+def test_unknown_problem_is_refused() -> None:
+    with pytest.raises(ValueError, match="unknown problem 'nope'"):
+        Prompts(MODEL_CODE, problem="nope")
+
+
+@pytest.mark.parametrize("problem, name, size, solution", [
+    ("cwlp", "Capacitated Warehouse Location Problem", "500 to 1000 customers and 80 to 150 warehouses", "solution"),
+    ("jssp", "Job Shop Scheduling Problem", "15 to 20 jobs on 5 to 15 machines", "schedule"),
+    ("mcnd", "Multi-Commodity capacitated fixed-charge Network Design problem",
+     "20 nodes, 220 to 300 arcs and 100 to 200 commodities", "network design"),
+    ("imo6", "a grid tiling problem", "N x N grids with N = 37 to 46", "tiling"),
+    ("gisp", "Generalized Independent Set Problem", "150 to 175 nodes", "node set"),
+    ("corridor", "wildlife corridor design problem", "square lattices of 20 x 20 to 25 x 25 cells", "corridor"),
+])
+def test_prompts_of_the_other_problems(problem: str, name: str, size: str, solution: str) -> None:
+    from problems import PROBLEMS
+    code: str = inspect.getsource(PROBLEMS[problem].base)
+    for variant in prompt_variants():
+        prompts: Prompts = Prompts(code, variant=variant, problem=problem)
+        system: str = prompts.mutation_messages(next(iter(prompts.mutations)), PARENT1, 1.0)[0]["content"]
+        assert name in system and size in system
+        assert not re.search(r"\{(task|model_code|scoring|problem|description|solution|evaluation_size|examples)\}", system)
+    assert f"best known {solution}" in Prompts(code, problem=problem, fitness_mode="lp").scoring
+
+
+def test_the_imo6_prompts_do_not_give_the_olympiad_away() -> None:
+    from problems import PROBLEMS
+    code: str = inspect.getsource(PROBLEMS["imo6"].base)
+    for variant in prompt_variants():
+        prompts: Prompts = Prompts(code, variant=variant, problem="imo6")
+        system: str = prompts.mutation_messages(next(iter(prompts.mutations)), PARENT1, 1.0)[0]["content"]
+        assert "olymp" not in system.lower() and "IMO" not in system and "sqrt" not in system
+
+
+def test_an_invalid_cut_gets_its_own_retry_message() -> None:
+    prompts: Prompts = Prompts(MODEL_CODE)
+    invalid: str = prompts.retry_message("removes the optimum of la05", invalid=True)["content"]
+    generic: str = prompts.retry_message("removes the optimum of la05")["content"]
+    assert "removes the optimum of la05" in invalid and "NOT VALID" in invalid and "prove" in invalid
+    assert "NOT VALID" not in generic  # other refusals (code error, too slow...) keep the usual text

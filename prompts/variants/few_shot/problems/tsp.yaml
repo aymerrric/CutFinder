@@ -1,0 +1,19 @@
+# Variant "few_shot", TSP: examples of refused answers (the actual refusal reasons seen in runs)
+# and of an accepted one. Fills {examples} in this variant's `system` (inserted as is).
+examples: |-
+  Examples of answers that were REFUSED, and why (for a TSP model with arcs x[i, j] and
+  positions u[i]):
+    - Repeating constraints the model already has, e.g. the MTZ constraints
+      u[i] - u[j] + n * x[i, j] <= n - 1 again: refused as USELESS (the LP already satisfies them).
+    - "The tour must leave city 1 towards its nearest neighbour": refused as INVALID (it removes
+      optimal tours: the check keeps one specific optimal tour, which may go the other way).
+    - A loop over all subsets of cities: refused as TOO SLOW (2^100 subsets).
+  Example of an answer that was ACCEPTED:
+    IDEA: In a tour, two cities are never linked in both directions (no 2-city subtour), so for
+    every pair i < j at most one of x[i, j] and x[j, i] is 1. The LP can set both to 0.5.
+    CODE:
+    ```python
+    x = m._x
+    m.addConstrs((x[i, j] + x[j, i] <= 1 for (i, j) in x.keys() if i < j), name="two_cycle")
+    ```
+  Your answer must be a DIFFERENT cut from these examples.

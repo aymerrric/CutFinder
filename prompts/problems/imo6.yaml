@@ -1,0 +1,24 @@
+# What the LLM is told about IMO6 (keys explained in tsp.yaml). The olympiad is NOT named and its
+# answer (N + ceil(2 sqrt N) - 3 tiles) is NOT given: an LLM that recognises the problem could add
+# "objective >= that value", a valid cut that closes the whole gap and measures memory, not cut
+# design (TODO: a check that flags cuts bounding the objective by a constant).
+
+problem: a grid tiling problem (rectangular tiles on an N x N grid, one uncovered cell per row and per column)
+
+solution: tiling
+
+description: |-
+  - On an N x N grid of unit cells, place axis-aligned rectangular tiles made of whole cells,
+    without overlap, so that every row and every column has exactly one uncovered cell (its
+    hole); every other cell is covered by exactly one tile. The objective is to minimize the
+    number of tiles. Rows and columns are numbered from 1 to N. The only data is N.
+  - The model describes a tile as a column interval (a, b), a <= b, used on consecutive rows (a
+    vertical strip). I = all intervals (a, b). Binary variables: h[i, j] = 1 if cell (i, j) is
+    the hole of row i; x[a, b, i] = 1 if on row i the columns a..b are covered by one tile;
+    s[a, b, i] = 1 if a tile of columns a..b starts at row i, t[a, b, i] = 1 if it ends at row i.
+    The objective is the sum of all s (one start per tile).
+  - Constraints: sum_j h[i, j] = 1 for each row, sum_i h[i, j] = 1 for each column; for each cell,
+    the active intervals of its row containing its column plus h[i, j] sum to 1; along each
+    interval: x[a, b, 1] = s[a, b, 1], x[a, b, i] - x[a, b, i - 1] = s[a, b, i] - t[a, b, i - 1]
+    for i >= 2, x[a, b, N] = t[a, b, N]. The data is also on the model: m._h, m._x, m._s, m._t,
+    m._N (an int) and m._I (the list of intervals (a, b)).

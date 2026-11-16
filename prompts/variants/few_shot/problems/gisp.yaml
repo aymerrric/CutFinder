@@ -1,0 +1,23 @@
+# Variant "few_shot", GISP: examples of refused answers and of an accepted one (fills {examples}).
+examples: |-
+  Examples of answers that were REFUSED, and why (for the GISP model with chosen nodes x[i] and
+  removed edges y[i, j]):
+    - Repeating constraints the model already has, e.g. x[i] + x[j] <= 1 again on a permanent
+      edge: refused as USELESS (the LP already satisfies them).
+    - "A removable edge is never removed, y[i, j] = 0": refused as INVALID (it removes the optimal
+      solutions that choose both ends of a removable edge).
+    - A loop over every subset of nodes: refused as TOO SLOW (2^n subsets).
+  Example of an answer that was ACCEPTED:
+    IDEA: Triangles with one removable edge: if (i, j) and (i, k) are permanent edges and (j, k)
+    is removable, i excludes j and k, and j and k can both be chosen only if (j, k) is removed.
+    CODE:
+    ```python
+    x, y = m._x, m._y
+    neighbours = {i: set() for i in m._nodes}
+    for (i, j) in m._permanent:
+        neighbours[i].add(j)
+        neighbours[j].add(i)
+    m.addConstrs((x[i] + x[j] + x[k] <= 1 + y[j, k] for (j, k) in m._removable for i in neighbours[j] & neighbours[k]),
+                 name="mixed_triangle")
+    ```
+  Your answer must be a DIFFERENT cut from these examples.

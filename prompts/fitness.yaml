@@ -1,0 +1,62 @@
+# How the cuts are scored, told to the LLM so that it aims at the exact fitness of the run.
+# One key per fitness mode of evolution/evaluator.py (FitnessMode, main.py --fitness_mode).
+# The value replaces {scoring} in common.yaml's `system` (and in the variants' `system`). It is
+# first filled with the problem's placeholders ({evaluation_size}, {solution}: problems/<problem>.yaml),
+# so a literal brace must be written twice. A variant may override some keys with its own
+# fitness.yaml.
+
+gap: |-
+  Fitness (how your cut is scored; higher is better):
+    - Your cut is added to the model of several LARGER instances ({evaluation_size}). Each one is
+      then solved by Gurobi for a fixed amount of solver work (not to optimality), under several
+      random seeds, and so is the model without any cut. We measure the final optimality gap
+      (best {solution} found vs proven lower bound) and compare it with the model without cut:
+          fitness = mean over seeds of 10 * exp(-mean over instances of
+                                                (gap_with_cut - gap_without_cut) / gap_without_cut)
+    - 10 = same gap as without the cut, more = a smaller gap (27.2 = every instance solved to
+      optimality), less = the cut slows the solver down.
+    - What raises it: a cut that helps Gurobi prove a better lower bound within the same work,
+      while keeping the model light. Every extra constraint makes every LP of the search
+      slower, so a large family of weak constraints can lower the fitness.
+    - Judge a cut by comparing its fitness with the best fitness found so far in this run,
+      which is given with every request.
+
+lp: |-
+  Fitness (how your cut is scored; higher is better):
+    - Your cut is added to the model of several LARGER instances ({evaluation_size}), and only
+      the LP RELAXATION is solved (every variable continuous: no branching, none of the
+      solver's own cuts). On each instance we measure the share of the root gap your cut closes:
+          closed = (LP_with_cut - LP_without_cut) / (best_known_{solution} - LP_without_cut)
+          fitness = 100 * mean over instances of closed
+    - The fitness is the percentage of the root gap closed: 0 = the LP relaxation is not
+      tightened at all, 100 = the LP bound reaches the best known {solution}.
+    - Only the strength of the LP relaxation counts. Rewriting the model's constraints in
+      another form, repeating them, or adding inequalities that the LP optimum already
+      satisfies brings no gain. Aim at inequalities that cut off the fractional optimal
+      solutions of this formulation's LP relaxation.
+    - The number of constraints does not lower the fitness, but the code must still build and
+      solve within the time limit on the largest of these instances.
+    - Judge a cut by comparing its fitness with the best fitness found so far in this run,
+      which is given with every request.
+
+gap_work: |-
+  Fitness (how your cut is scored; higher is better):
+    - Your cut is added to the model of several LARGER instances ({evaluation_size}). Each one is
+      then solved by Gurobi for a fixed amount of solver work (not to optimality), under several
+      random seeds, and so is the model without any cut. We measure the final optimality gap
+      (best {solution} found vs proven lower bound) and compare it with the model without cut.
+    - It is also added to a few SMALLER instances that the model without cut solves to
+      optimality within that work. There we measure the work needed to PROVE optimality, with
+      and without your cut (not proved within the limit = the whole limit).
+    - Both are combined, every instance counting the same:
+          fitness = mean over seeds of 10 * exp(-mean over instances of r_i), with
+          r_i = (gap_with_cut - gap_without_cut) / gap_without_cut      on the larger instances,
+          r_i = (work_with_cut - work_without_cut) / work_without_cut   on the smaller ones.
+    - 10 = no change, more = smaller gaps and faster proofs, less = the cut slows the solver
+      down. A cut that closes gaps on the large instances but makes the proof of optimality
+      slower on the small ones loses fitness.
+    - What raises it: a cut that helps Gurobi prove a better lower bound within the same work,
+      while keeping the model light. Every extra constraint makes every LP of the search
+      slower, so a large family of weak constraints can lower the fitness.
+    - Judge a cut by comparing its fitness with the best fitness found so far in this run,
+      which is given with every request.

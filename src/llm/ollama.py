@@ -60,4 +60,9 @@ class OllamaClient(LLMClient):
             f"{self.model}: {answer.get('prompt_eval_count')} tokens in, "
             f"{answer.get('eval_count')} out, {answer.get('total_duration', 0) / 1e9:.1f}s"
         )
-        return answer["message"]["content"]
+        message: Dict[str, Any] = answer["message"]
+        if not message.get("content") and message.get("thinking"):
+            # a model whose template has no end of thinking (OProver, 15 Nov) puts its whole answer
+            # in the thinking field: that is its answer
+            return str(message["thinking"])
+        return str(message["content"])

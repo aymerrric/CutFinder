@@ -14,6 +14,13 @@ Instance = Dict[str, Any]
 
 class Problem(Enum):
     TSP = "tsp"
+    CWLP = "cwlp"
+    JSSP = "jssp"
+    MCND = "mcnd"
+    IMO6 = "imo6"
+    MCLP = "mclp"
+    GISP = "gisp"
+    CORRIDOR = "corridor"
 
 
 class Loader(ABC):

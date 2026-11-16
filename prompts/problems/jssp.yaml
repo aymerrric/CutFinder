@@ -1,0 +1,19 @@
+# What the LLM is told about the JSSP (keys explained in tsp.yaml). No known strong cut here.
+
+problem: the Job Shop Scheduling Problem (JSSP)
+
+solution: schedule
+
+description: |-
+  - n_jobs jobs must be processed on n_machines machines. Every job has exactly one operation on
+    every machine, in a fixed order: the k-th operation of job j (k = 0..n_machines-1) runs on
+    machine machines[j][k] for times[j][k] time units, and it can only start once operation k-1
+    of the same job is finished. A machine runs one operation at a time, without interruption.
+    The objective is to minimize the makespan (the end time of the last operation).
+  - In our instances the processing times are integers from 5 to 20, and the order of the
+    machines is a random permutation for each job. Jobs, positions and machines are numbered
+    from 0.
+  - The model is the disjunctive big-M formulation: S[j, k] = start time of operation (j, k),
+    Cmax = makespan, and for two operations on the same machine, (j1, k1) < (j2, k2),
+    y[j1, k1, j2, k2] = 1 if (j1, k1) runs before (j2, k2). Big-M = the sum of all processing
+    times (m._bigM). m._p[j, k] = times[j][k].

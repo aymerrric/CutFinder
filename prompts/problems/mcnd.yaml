@@ -1,0 +1,20 @@
+# What the LLM is told about the MCND (keys explained in tsp.yaml). No known strong cut here.
+
+problem: the Multi-Commodity capacitated fixed-charge Network Design problem (MCND)
+
+solution: network design
+
+description: |-
+  - A network has nodes N and candidate directed arcs A. Opening arc (i, j) costs f[i, j] and lets
+    it carry at most u[i, j] units of flow in total; each unit of flow on it costs c[i, j]. Every
+    commodity k must send d[k] units from its origin O[k] to its destination D[k], possibly split
+    over several paths. The objective is to minimize the opening costs plus the flow costs.
+  - In our instances the unit costs are integers from 10 to 100 and the demands from 10 to 100.
+    A cycle through every node is made of arcs whose capacity is the total demand (so every
+    instance is feasible); the other capacities are a few mean demands or less. Opening costs are
+    large compared with unit costs. Nodes and commodities are numbered from 1.
+  - The model is the arc-based formulation: x[i, j, k] >= 0 = flow of commodity k on arc (i, j),
+    y[i, j] = 1 if arc (i, j) is open. For each commodity: the flow leaving O[k] is d[k], the flow
+    entering D[k] is d[k], every other node is balanced. Capacity: the total flow on (i, j) is at
+    most u[i, j] * y[i, j]. The data is also on the model: m._N, m._A, m._K, m._c, m._f, m._u,
+    m._d, m._O, m._D.

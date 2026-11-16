@@ -74,6 +74,13 @@ def arg_parser(argv: Optional[List[str]] = None) -> argparse.Namespace:
         help="LLM sampling temperature (default: the model's own)",
     )
     parser.add_argument(
+        "--llm_backend",
+        type=str,
+        choices=["ollama", *parameters.API_PROVIDERS],
+        default=parameters.LLM_BACKEND,
+        help="Where the LLM runs: the local Ollama server, or an OpenAI-compatible API (key in llm_keys.env)",
+    )
+    parser.add_argument(
         "--ollama_host",
         type=str,
         default=parameters.OLLAMA_HOST,
@@ -97,6 +104,14 @@ def arg_parser(argv: Optional[List[str]] = None) -> argparse.Namespace:
         nargs="+",
         default=parameters.FITNESS_SEEDS,
         help="Gurobi seeds of the fitness during the run (mean over them), e.g. --fitness_seeds 42 43 44",
+    )
+    parser.add_argument(
+        "--fitness_mode",
+        type=str,
+        choices=["gap", "lp", "gap_work"],
+        default=parameters.FITNESS_MODE,
+        help="Fitness of the GA: 'gap' (MIP gap, mean over --fitness_seeds), 'lp' (%% of the root gap "
+             "closed) or 'gap_work' (gap, plus the work to prove optimality on optimality.pkl)",
     )
     parser.add_argument(
         "--review_seeds",
@@ -127,6 +142,28 @@ def arg_parser(argv: Optional[List[str]] = None) -> argparse.Namespace:
         type=str,
         default=parameters.DATA_DIR,
         help="Folder holding <problem>/validation.pkl and <problem>/evaluation.pkl",
+    )
+    parser.add_argument(
+        "--instance_level",
+        type=str,
+        choices=parameters.INSTANCE_LEVELS,
+        default=parameters.INSTANCE_LEVEL,
+        help="Evaluation and test sets: 'default' (evaluation.pkl, test.pkl) or 'hard' (larger "
+             "instances: evaluation_hard.pkl, test_hard.pkl; prepare_instances.py --instance_level hard)",
+    )
+    parser.add_argument(
+        "--review_level",
+        type=str,
+        choices=parameters.INSTANCE_LEVELS,
+        default=None,
+        help="review_run.py only: review the run's best cut on the test set of this instance level "
+             "instead of its own (written to review_<level>.json; review.json is kept)",
+    )
+    parser.add_argument(
+        "--validity_dir",
+        type=str,
+        default=parameters.VALIDITY_DIR,
+        help="Folder holding <problem>/validity.pkl (prepare_validity.py; the same for every CPU)",
     )
     parser.add_argument(
         "--runs_dir",

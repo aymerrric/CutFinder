@@ -7,7 +7,7 @@ import platform
 import random
 import socket
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from multiprocessing.connection import Connection
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -32,6 +32,11 @@ ERROR: str = "ERROR"  # the formulation (or Gurobi) raised an exception
 TOO_LARGE: str = "TOO_LARGE"  # more constraints than max_constraints: refused before solving
 KILLED: str = "KILLED"  # isolated child still running after time_limit + build_timeout
 CRASHED: str = "CRASHED"  # isolated child died without sending a result (e.g. out of memory)
+
+# One point of a solve's progress: (seconds since the start of optimize(), best objective found,
+# best bound, Gurobi work so far). The best objective is GRB.INFINITY (1e100) while no solution is
+# known. Results saved before 2026-11-09 have 3-element points (no work).
+TrajectoryPoint = Tuple[float, ...]
 
 # Gurobi accepts seeds in [0, 2_000_000_000]
 MAX_SEED: int = 2_000_000_000
@@ -70,6 +75,9 @@ class SolveResult:
     threads: int = 0
     machine: str = ""
     cpu: str = ""
+    # progress during the solve, in time order (only with record_trajectory=True): the gap at
+    # any time t can be read from it (evolution/benchmark.py), e.g. the paper's checkpoints
+    trajectory: Optional[List[TrajectoryPoint]] = None
 
     @classmethod
     def failed(
@@ -91,6 +99,8 @@ class SolveSettings:
     verbose: bool
     max_constraints: Optional[int]  # None = no cap
     keep_solution: bool = False  # store the variable values in SolveResult.solution
+    params: Dict[str, Any] = field(default_factory=dict)  # other Gurobi parameters, e.g. {"MIPGap": 1e-5}
+    record_trajectory: bool = False  # record (time, best objective, bound) during the solve
 
 
 class Solver:
@@ -113,6 +123,8 @@ class Solver:
         max_constraints: Optional[int] = parameters.MAX_CONSTRAINTS,
         keep_solution: bool = False,
         work_limit: Optional[float] = None,
+        params: Optional[Dict[str, Any]] = None,
+        record_trajectory: bool = False,
     ) -> None:
         """
         seed_mode: SET = always use `seed`; RANDOM = draw a new seed for every solve
@@ -129,6 +141,10 @@ class Solver:
         work_limit: stop after this much Gurobi work (about 1 s of work on Gurobi's reference
                     machine). Unlike `time_limit`, it gives the same result on every run and
                     machine (for the same `threads`). `time_limit` stays as a safety net.
+        params: other Gurobi parameters set on every model, by name (e.g. the paper's test
+                protocol: {"MIPGap": 1e-5, "Method": 4}). Applied last: they override the others.
+        record_trajectory: record the best objective and bound during the solve
+                           (SolveResult.trajectory), to read the gap at given times afterwards.
         """
         if log_dir is not None and not os.path.isdir(log_dir):
             raise FileNotFoundError(f"{log_dir} does not exist: create it or pass log_dir=None")
@@ -144,6 +160,8 @@ class Solver:
         self.build_timeout: float = build_timeout
         self.max_constraints: Optional[int] = max_constraints
         self.keep_solution: bool = keep_solution
+        self.params: Dict[str, Any] = dict(params or {})
+        self.record_trajectory: bool = record_trajectory
         self.formulations: Dict[str, Formulation] = {}
         # formulation -> instance -> results, in solve order
         self.results: Dict[str, Dict[str, List[SolveResult]]] = {}
@@ -169,7 +187,7 @@ class Solver:
             log_file = os.path.join(self.log_dir, f"{formulation}_{instance['name']}_seed{seed}.log")
         settings: SolveSettings = SolveSettings(
             self.time_limit, self.work_limit, self.threads, seed, log_file, self.verbose,
-            self.max_constraints, self.keep_solution,
+            self.max_constraints, self.keep_solution, self.params, self.record_trajectory,
         )
         build: Formulation = self.formulations[formulation]
         result: SolveResult
@@ -264,8 +282,15 @@ def build_and_solve(
                 f"{model.NumConstrs} constraints > max_constraints={settings.max_constraints}",
             )
         _configure(model, settings)
-        model.optimize()
-        return _read_result(model, name, formulation, settings.seed, settings.keep_solution)
+        if settings.record_trajectory:
+            model._trajectory = []  # filled by _record_progress
+            model.optimize(_record_progress)
+        else:
+            model.optimize()
+        result: SolveResult = _read_result(model, name, formulation, settings.seed, settings.keep_solution)
+        if settings.record_trajectory:
+            result.trajectory = model._trajectory
+        return result
     except Exception as e:  # noqa: BLE001
         return SolveResult.failed(name, formulation, settings.seed, ERROR, f"{type(e).__name__}: {e}")
     finally:
@@ -344,6 +369,29 @@ def _configure(model: gp.Model, settings: SolveSettings) -> None:
     model.Params.Threads = settings.threads
     if settings.log_file is not None:
         model.Params.LogFile = settings.log_file
+    for name, value in settings.params.items():
+        model.setParam(name, value)
+
+
+# what each callback location calls the best objective and the best bound
+_PROGRESS_CODES: Dict[int, Tuple[int, int]] = {
+    GRB.Callback.MIP: (GRB.Callback.MIP_OBJBST, GRB.Callback.MIP_OBJBND),
+    GRB.Callback.MIPSOL: (GRB.Callback.MIPSOL_OBJBST, GRB.Callback.MIPSOL_OBJBND),
+    GRB.Callback.MIPNODE: (GRB.Callback.MIPNODE_OBJBST, GRB.Callback.MIPNODE_OBJBND),
+}
+
+
+def _record_progress(model: gp.Model, where: int) -> None:
+    """Gurobi callback: append (time, best objective, bound, work) to model._trajectory when the
+    best objective or the bound changes."""
+    codes: Optional[Tuple[int, int]] = _PROGRESS_CODES.get(where)
+    if codes is None:
+        return
+    best: float = model.cbGet(codes[0])
+    bound: float = model.cbGet(codes[1])
+    points: List[TrajectoryPoint] = model._trajectory
+    if not points or points[-1][1:3] != (best, bound):
+        points.append((model.cbGet(GRB.Callback.RUNTIME), best, bound, model.cbGet(GRB.Callback.WORK)))
 
 
 def _safe_attr(model: gp.Model, name: str) -> Optional[float]:

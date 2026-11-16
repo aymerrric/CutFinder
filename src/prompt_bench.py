@@ -40,9 +40,11 @@ from evolution.individual import SEED, Individual, normalized_code
 from evolution.population import Population
 from evolution.prompts import Prompts, ReplyFormatError, parse_reply, prompt_variants
 from llm.base import LLMClient, LLMError, Message
+from llm.factory import BACKENDS, make_llm
 from llm.ollama import OllamaClient
 from loaders.base import Instance, Loader
-from main import PROBLEMS, Problem, check_same_machine
+from main import check_same_machine
+from problems import PROBLEMS, Problem
 from solvers.solver import Solver, machine_info
 from utils import parameters
 
@@ -362,7 +364,9 @@ def report(results: List[Result], config: Dict[str, Any]) -> str:
                   f"Quick score on {config['score_instances']} evaluation instance(s), one Gurobi seed: "
                   "10 = same gap as the model without cut, higher is better. Indicative only (Step 15: "
                   "single-seed scores are noisy).", "",
-                  "| variant | fitness mean ± std | best | share above 10 |", "|---|---|---|---|"]
+                  "± = sample std over the accepted cuts of the variant (spread between cuts, each "
+                  "scored once).", "",
+                  "| variant | fitness mean ± std over its cuts | best | share above 10 |", "|---|---|---|---|"]
         for st in sorted(stats, key=lambda x: statistics.mean(x.fitness) if x.fitness else 0, reverse=True):
             if st.fitness:
                 above: int = sum(f > 10 for f in st.fitness)
@@ -452,6 +456,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--temperature", type=float, default=parameters.TEMPERATURE)
     parser.add_argument("--name", type=str, default=None, help="folder name (default: date)")
     parser.add_argument("--problem_name", type=str, default=parameters.PROBLEM_NAME)
+    parser.add_argument("--llm_backend", type=str, choices=BACKENDS, default=parameters.LLM_BACKEND)
     parser.add_argument("--ollama_host", type=str, default=parameters.OLLAMA_HOST)
     parser.add_argument("--data_dir", type=str, default=parameters.DATA_DIR)
     parser.add_argument("--runs_dir", type=str, default=parameters.RUNS_DIR)
@@ -471,7 +476,7 @@ def run_bench(args: argparse.Namespace, llm: Optional[LLMClient] = None) -> List
     check_same_machine(evaluation, args.threads)
     variants: List[str] = args.variants or prompt_variants()
     model_code: str = inspect.getsource(problem.base)
-    prompts: Dict[str, Prompts] = {v: Prompts(model_code, variant=v) for v in variants}  # fails early if one is broken
+    prompts: Dict[str, Prompts] = {v: Prompts(model_code, variant=v, problem=problem.name) for v in variants}  # fails early if one is broken
 
     name: str = args.name or time.strftime("%Y%m%d_%H%M%S")
     folder: str = os.path.join(args.runs_dir, "prompt_bench", name)
@@ -496,8 +501,7 @@ def run_bench(args: argparse.Namespace, llm: Optional[LLMClient] = None) -> List
     best_fitness: float = max(p.fitness for p in parents)
 
     if llm is None:
-        options: Dict[str, Any] = {} if args.temperature is None else {"temperature": args.temperature}
-        llm = OllamaClient(args.model_name, host=args.ollama_host, options=options)
+        llm = make_llm(args.llm_backend, args.model_name, args.temperature, args.ollama_host)
     host, cpu = machine_info()
     config: Dict[str, Any] = {
         "name": name, "variants": variants, "model_name": args.model_name, "temperature": args.temperature,

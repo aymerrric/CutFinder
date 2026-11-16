@@ -15,6 +15,12 @@ class LLMError(Exception):
     """Every try of a request failed: the LLM could not be reached or did not answer."""
 
 
+class QuotaExhausted(Exception):
+    """The provider's DAILY quota is used up: no try can succeed before tomorrow. Not an LLMError:
+    the genetic algorithm does not count it as a failed attempt, it stops the run (main.py marks
+    it failed, after its last saved generation, and the night plan resumes it the next night)."""
+
+
 class LLMClient(ABC):
     """
     Sends a conversation to an LLM and returns its answer as text. Nothing else: it knows
@@ -41,6 +47,8 @@ class LLMClient(ABC):
         for attempt in range(1, self.max_retries + 1):
             try:
                 return self.clean(self._send(messages))
+            except QuotaExhausted:
+                raise  # retrying cannot help today
             except Exception as e:  # noqa: BLE001 (any backend error is retried)
                 last_error = e
                 logger.warning(

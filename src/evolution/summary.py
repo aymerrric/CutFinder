@@ -13,11 +13,12 @@ from typing import Any, DefaultDict, Dict, List, Optional
 from evolution.individual import Individual
 from evolution.population import Population
 from evolution.recorder import ACCEPTED
+from evolution.review import paired_difference
 from utils.run_files import LLM_DIR, POPULATION, REVIEW, STATUS, SUMMARY
 
 SETTINGS: List[str] = [  # main.py arguments shown in the summary, when known
     "problem_name", "population_size", "num_generations", "elitism_ratio", "crossover_rate",
-    "max_llm_attempts", "temperature", "seed", "work_limit", "threads", "fitness_seeds",
+    "max_llm_attempts", "temperature", "seed", "work_limit", "threads", "fitness_mode", "fitness_seeds",
     "review_seeds",
 ]
 
@@ -104,25 +105,43 @@ def generations_table(population: Population) -> List[str]:
 
 def review_section(review: Dict[str, Any]) -> List[str]:
     models: Dict[str, Dict[str, Any]] = {m["name"]: m for m in review["models"]}
+    instances: str = (  # reviews before 2026-11-02 reused the evaluation set (no "instances" key)
+        f"on the {len(review['instances'])} held-out instances of `{review['instance_set']}` (never seen by the GA)"
+        if "instances" in review else "on the evaluation set (the instances the GA was scored on)"
+    )
+    mode: str = review.get("fitness_mode", "gap")  # reviews before 2026-11-02: gap runs only
     lines: List[str] = [
-        f"The base model, the seed cut and the best cut under Gurobi seeds {review['seeds']} "
-        "(fitness against the base model solved with the same seed). From `review.json`.", "",
-        "| model | fitness mean ± std | min | max | mean gap | fitness during the run |",
-        "|---|---|---|---|---|---|",
+        f"The base model, the seed cut and the best cut {instances}, under Gurobi seeds {review['seeds']} "
+        "(fitness against the base model solved with the same seed), and the % of the root gap "
+        f"closed by each model's LP relaxation. ± = sample std over the {len(review['seeds'])} review seeds "
+        "(same cut, same instances: solver noise, not the spread between runs). From `review.json`.", "",
+        f"| model | fitness mean ± std over the seeds | min | max | mean gap | LP gap closed | fitness during the run ({mode}) |",
+        "|---|---|---|---|---|---|---|",
     ]
     for name, m in models.items():
         fitness: List[float] = [s["fitness"] for s in m["scores"]]
         run: str = f"{m['run_fitness']:.3f}" if m.get("run_fitness") is not None else "-"
+        lp: str = f"{m['lp_fitness']:.2f}%" if m.get("lp_fitness") is not None else "-"  # older reviews: none
         lines.append(f"| {name} | {m['fitness_mean']:.3f} ± {m['fitness_std']:.3f} | {min(fitness):.3f} | "
-                     f"{max(fitness):.3f} | {100 * m['mean_gap']:.2f}% | {run} |")
+                     f"{max(fitness):.3f} | {100 * m['mean_gap']:.2f}% | {lp} | {run} |")
     if "best" in models and "seed" in models:
         best: List[float] = [s["fitness"] for s in models["best"]["scores"]]
         seed: List[float] = [s["fitness"] for s in models["seed"]["scores"]]
         wins: int = sum(b > s for b, s in zip(best, seed))
+        mean, std = paired_difference(best, seed)
         lines += ["", f"The best cut beats the seed cut on **{wins}/{len(best)} seeds** "
-                      f"({models['best']['fitness_mean'] - models['seed']['fitness_mean']:+.3f} on average)."]
+                      f"({mean:+.3f} on average, ± {std:.3f}: std over the seeds of the per-seed difference)."]
+        if models["best"].get("lp_fitness") is not None and models["seed"].get("lp_fitness") is not None:
+            lines[-1] += (f" LP relaxation: {models['best']['lp_fitness']:.2f}% of the root gap closed vs "
+                          f"{models['seed']['lp_fitness']:.2f}% for the seed cut.")
     elif "seed" in models:
         lines += ["", "The best cut is the seed cut itself: no cut better than the seed was found."]
+    worked: List[str] = [f"{name} {100 * m['work_change_mean']:+.1f}% ± {100 * m['work_change_std']:.1f}%"
+                         for name, m in models.items() if name != "base" and m.get("work_change_mean") is not None]
+    if worked:  # gap_work runs
+        lines += ["", f"Work to prove optimality on the {len(review.get('optimality_instances', []))} held-out "
+                      "instances the base model solves (mean change vs the base model, ± std over the seeds; "
+                      "< 0 = faster): " + ", ".join(worked) + "."]
     return lines
 
 

@@ -1,0 +1,17 @@
+# Variant "concise": one short bullet per fitness mode (replaces {scoring} in its `system`).
+gap: |-
+  - Fitness (higher is better): Gurobi's optimality gap on larger instances ({evaluation_size})
+      after a fixed amount of work, vs the model without cut, mean over seeds:
+      10 * exp(-mean (gap_cut - gap_base) / gap_base). 10 = no gain. Keep the model light.
+      Compare with the best fitness so far (given below).
+lp: |-
+  - Fitness (higher is better): % of the root gap closed by the LP relaxation on larger
+      instances ({evaluation_size}): 100 * mean (LP_cut - LP_base) / (best_{solution} - LP_base).
+      0 = LP not tightened, 100 = LP reaches the best {solution}. Only the LP bound counts.
+      Compare with the best fitness so far (given below).
+gap_work: |-
+  - Fitness (higher is better): 10 * exp(-mean of r_i) over seeds, with r_i = the relative change
+      of Gurobi's optimality gap on larger instances ({evaluation_size}) after a fixed amount of
+      work, and of the work to PROVE optimality on a few smaller instances solved without cut.
+      10 = no gain. Faster proofs and smaller gaps raise it. Keep the model light.
+      Compare with the best fitness so far (given below).

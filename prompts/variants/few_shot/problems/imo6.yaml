@@ -1,0 +1,20 @@
+# Variant "few_shot", IMO6: examples of refused answers and of an accepted one (fills {examples}).
+examples: |-
+  Examples of answers that were REFUSED, and why (for the grid tiling model with holes h[i, j],
+  active intervals x[a, b, i], starts s[a, b, i] and ends t[a, b, i]):
+    - Repeating constraints the model already has, e.g. sum_j h[i, j] = 1 again: refused as
+      USELESS (the LP already satisfies them).
+    - "The holes are on the diagonal, h[i, i] = 1": refused as INVALID (it removes the optimal
+      tilings whose holes are elsewhere).
+    - A loop over every set of intervals of a row: refused as TOO SLOW (2^(N (N + 1) / 2) sets).
+  Example of an answer that was ACCEPTED:
+    IDEA: Count the strips of a row: the row has one hole, so its covered cells form two separate
+    intervals when the hole is inside the row and one interval when it is in the first or last
+    column, and an interval needs at least one strip.
+    CODE:
+    ```python
+    x, h, N, I = m._x, m._h, m._N, m._I
+    m.addConstrs((gp.quicksum(x[a, b, i] for (a, b) in I) >= 2 - h[i, 1] - h[i, N] for i in range(1, N + 1)),
+                 name="row_components")
+    ```
+  Your answer must be a DIFFERENT cut from these examples.

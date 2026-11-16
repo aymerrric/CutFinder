@@ -1,0 +1,24 @@
+# What the LLM is told about the corridor problem (keys explained in tsp.yaml). Not in the paper: a
+# less-studied problem (Conrad et al. 2012, Dilkina and Gomes 2010), to tell recalled cuts from
+# designed ones (TODO P3.11).
+
+problem: the wildlife corridor design problem (a budget-constrained connected subgraph problem)
+
+solution: corridor
+
+description: |-
+  - Land cells are the nodes of a graph (our instances: a square lattice, each cell adjacent to the
+    cells above, below, left and right). Some cells are reserves, which must be connected. Buy
+    cells, each at a cost, within a budget, so that the bought cells form a connected subgraph
+    containing every reserve; maximize the total utility of the bought cells (the model minimizes
+    its negation).
+  - In our instances there are 3 reserves (the two opposite corners and one random cell), they
+    cost 0; the other costs and every utility are uniform integers in 1..100 (independent of each
+    other); the budget is 20% to 30% of the total cost.
+  - The model: binary x[i] = 1 if cell i is bought; connectivity by a single-commodity flow: a
+    source sends y = sum_i x[i] units into the first reserve r; every bought cell keeps one unit;
+    continuous f[i, j] >= 0 on both directions (i, j) of every edge, with f[i, j] <= n * x[j]
+    (n = number of cells); balance at each cell j: inflow(j) (+ y if j = r) = x[j] + outflow(j).
+    Also sum_i cost[i] * x[i] <= budget and x[t] = 1 for every reserve t. The data is also on the
+    model: m._x, m._f (keys: the arcs), m._y, m._nodes, m._edges (pairs (i, j), i < j), m._arcs
+    (both directions), m._reserves (r first), m._cost and m._utility (dicts), m._budget.

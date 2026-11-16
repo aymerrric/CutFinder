@@ -64,3 +64,29 @@ def test_fixed_rounds_integers_and_skips_unknown_names(tsp_instances: List[Insta
 def test_partials_compose(tsp_instances: List[Instance]) -> None:
     build = functools.partial(relaxed, build=functools.partial(with_cut, base=create_model, code=TWO_CYCLE))
     assert solve(build(**tsp_instances[0]["args"])).Status == gp.GRB.OPTIMAL
+
+
+def test_cut_violations_measures_each_violated_cut_row() -> None:
+    from models.transforms import cut_violations, read_violations
+    import gurobipy as gp
+
+    def base(**args: object) -> gp.Model:
+        m = gp.Model()
+        m.Params.OutputFlag = 0
+        x = m.addVar(name="x")
+        m.addConstr(x <= 10, name="cap")
+        m._x = x
+        m.update()
+        return m
+
+    def with_two_rows(**args: object) -> gp.Model:
+        m = base()
+        m.addConstr(m._x >= 7, name="too_strong")  # violated by 2 at x = 5
+        m.addConstr(m._x <= 9)  # unnamed, satisfied
+        return m
+
+    model = cut_violations(with_two_rows, base, {"x": 5.0})
+    model.optimize()
+    values = {v.VarName: v.X for v in model.getVars()}
+    assert read_violations(values) == {"too_strong": pytest.approx(2.0)}
+    assert "cut_row_2" in [c.ConstrName for c in model.getConstrs()]  # the unnamed row, numbered

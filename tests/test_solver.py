@@ -256,3 +256,32 @@ def test_machine_is_recorded_for_failed_solves(tsp_instances: List[Instance]) ->
     solver: Solver = Solver(log_dir=None, threads=1)
     solver.add_formulation("broken", raises)
     assert solver.solve(tsp_instances[0], "broken").machine == machine_info()[0]
+
+
+@pytest.mark.parametrize("isolated", [True, False])
+def test_extra_gurobi_params_are_applied(isolated: bool) -> None:
+    big: Instance = LoaderTSP().generate(1, seed=0, min_cities=40, max_cities=40)[0]
+    solver: Solver = Solver(log_dir=None, threads=2, isolated=isolated, params={"SolutionLimit": 1})
+    solver.add_formulation("base", create_model)
+    assert solver.solve(big, "base").status == "SOLUTION_LIMIT"  # stopped at the first solution
+
+
+@pytest.mark.parametrize("isolated", [True, False])
+def test_trajectory_is_recorded_only_when_asked(tsp_instances: List[Instance], isolated: bool) -> None:
+    big: Instance = LoaderTSP().generate(1, seed=0, min_cities=40, max_cities=40)[0]
+    solver: Solver = Solver(log_dir=None, threads=2, isolated=isolated, record_trajectory=True, time_limit=5)
+    solver.add_formulation("base", create_model)
+    result: SolveResult = solver.solve(big, "base")
+    points = result.trajectory
+    assert points, "no progress recorded"
+    times = [p[0] for p in points]
+    assert times == sorted(times) and times[-1] <= result.runtime
+    works = [p[3] for p in points]  # Gurobi work, alongside the time
+    assert works == sorted(works) and works[-1] <= result.work + 1e-9
+    bounds = [p[2] for p in points]
+    assert bounds == sorted(bounds)  # minimization: the bound only rises
+    found = [p[1] for p in points if p[1] < 1e99]
+    assert found == sorted(found, reverse=True) and found[-1] == pytest.approx(result.obj_val)
+    plain: Solver = Solver(log_dir=None, threads=2, isolated=isolated)
+    plain.add_formulation("base", create_model)
+    assert plain.solve(tsp_instances[0], "base").trajectory is None

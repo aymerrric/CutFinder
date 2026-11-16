@@ -1,0 +1,24 @@
+# Variant "few_shot", MCND: examples of refused answers and of an accepted one (fills {examples}).
+examples: |-
+  Examples of answers that were REFUSED, and why (for an MCND model with flows x[i, j, k] and arc
+  openings y[i, j]):
+    - Repeating constraints the model already has, e.g. the capacity constraints
+      sum_k x[i, j, k] <= u[i, j] * y[i, j] again: refused as USELESS (the LP already satisfies them).
+    - "Each commodity uses a single path": refused as INVALID (an optimal solution may split a
+      commodity over several paths when one arc cannot carry all of it).
+    - A loop over all subsets of nodes: refused as TOO SLOW (2^20 subsets, each with many commodities).
+  Example of an answer that was ACCEPTED:
+    IDEA: The flow leaving node s is at least the total demand of the commodities that start at s,
+    and only open arcs carry flow, so at least q_s arcs leaving s are open, q_s being the smallest
+    q whose q largest capacities out of s sum to that supply. The LP opens fractions of arcs, which
+    this integer count forbids.
+    CODE:
+    ```python
+    y, u, d, O = m._y, m._u, m._d, m._O
+    for s in set(O.values()):
+        supply = sum(d[k] for k in m._K if O[k] == s)
+        caps = sorted((u[i, j] for (i, j) in m._A if i == s), reverse=True)
+        q = next((n for n in range(1, len(caps) + 1) if sum(caps[:n]) >= supply), len(caps))
+        m.addConstr(gp.quicksum(y[i, j] for (i, j) in m._A if i == s) >= q, name=f"origin_arcs[{s}]")
+    ```
+  Your answer must be a DIFFERENT cut from these examples.

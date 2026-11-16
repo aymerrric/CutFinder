@@ -1,0 +1,21 @@
+# What the LLM is told about GISP (keys explained in tsp.yaml). Not in the paper: a less-studied
+# problem (one polyhedral paper, Colombi, Mansini and Savelsbergh 2017), to tell recalled cuts
+# from designed ones (TODO P3.11).
+
+problem: the Generalized Independent Set Problem (GISP)
+
+solution: node set
+
+description: |-
+  - A graph has permanent edges and removable edges. Choose a set of nodes: two chosen nodes must
+    not be joined by a permanent edge; two chosen nodes joined by a removable edge are allowed if
+    the edge is removed, at a cost. Every node has the same weight and every removable edge the
+    same removal cost. The objective is to maximize weight * (number of chosen nodes) - cost *
+    (number of removed edges); the model minimizes its negation.
+  - In our instances the graph is random: each pair of nodes is an edge with probability 0.3, and
+    each edge is removable with probability 0.25; the weight is 100 and the cost 1.
+  - The model: binary x[i] = 1 if node i is chosen, binary y[i, j] = 1 if the removable edge
+    (i, j) is removed (edges are pairs i < j, nodes numbered from 0). Constraints: x[i] + x[j] <= 1
+    for each permanent edge, x[i] + x[j] - y[i, j] <= 1 for each removable edge. The data is also
+    on the model: m._x, m._y, m._nodes (list), m._permanent and m._removable (lists of pairs
+    (i, j), i < j), m._weight and m._cost (ints).

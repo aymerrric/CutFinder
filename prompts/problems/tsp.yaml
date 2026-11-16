@@ -1,0 +1,21 @@
+# What the LLM is told about the problem. Each key fills the placeholder of the same name in the
+# `system` templates (common.yaml and the variants) and in fitness.yaml:
+#   {problem}      the problem's name, inside a sentence ("... a MILP model of {problem} ...")
+#   {description}  what the problem is and what the model's variables mean (bullets, plain text)
+#   {solution}     what one feasible solution is called ("best known {solution}")
+# {evaluation_size} is not written here: it comes from problems.py (the evaluation set's sizes,
+# e.g. "60 to 100 cities"), so it always matches the instances the cuts are scored on.
+# A variant may override or add keys with variants/<variant>/problems/<problem>.yaml.
+# The texts are inserted as they are: braces need no escaping. Do not list known strong cuts here:
+# whether the GA rediscovers them is one of the questions of the project.
+
+problem: the Traveling Salesman Problem (TSP)
+
+solution: tour
+
+description: |-
+  - A salesman must visit each of n cities exactly once and come back to the start, at minimum
+    total cost. c[i, j] is the cost of going from city i to city j. In our instances the cities
+    are random points in the unit square and c is their Euclidean distance (so c[i, j] = c[j, i]).
+  - The model is the MTZ formulation: x[i, j] = 1 if the tour goes directly from city i to city
+    j; u[i] is the position of city i in the tour, city 1 being the start (u[1] = 1).

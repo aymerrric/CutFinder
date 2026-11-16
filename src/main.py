@@ -19,10 +19,9 @@ import statistics
 import sys
 import time
 from collections import Counter
-from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
-from evolution.evaluator import CutEvaluator
+from evolution.evaluator import CutEvaluator, FitnessMode
 from evolution.genetic import GeneticAlgorithm
 from evolution.individual import SEED, Individual
 from evolution.population import Population
@@ -31,33 +30,18 @@ from evolution.recorder import AttemptRecorder
 from evolution.review import CutReview, format_review, review_cuts
 from evolution.summary import write_summary
 from llm.base import LLMClient
-from llm.ollama import OllamaClient
+from llm.factory import make_llm
 from loaders.base import Instance, Loader
 from loaders.sets import BASE
-from loaders.tsp import LoaderTSP
-from models import tsp
-from solvers.solver import Formulation, SolveResult, Solver, machine_info
+from problems import PROBLEMS, Problem, check_minimization, instance_set
+from solvers.solver import SolveResult, Solver, machine_info
 from utils import parameters
 from utils.parser import arg_parser
+from utils.log_archive import pack_logs
 from utils.run_files import LLM_DIR, LOG, POPULATION, REVIEW, STATUS, run_name_of
 from utils.status import FAILED, FINISHED, STOPPED, RunStatus
 
 logger: logging.Logger = logging.getLogger("main")
-
-
-@dataclass
-class Problem:
-    """Everything problem-specific that a run needs."""
-
-    loader: Callable[[str], Loader]  # data_dir -> loader
-    base: Formulation  # the model without any cut
-    baseline_idea: str  # the seed of the first generation
-    baseline_code: str
-
-
-PROBLEMS: Dict[str, Problem] = {
-    "tsp": Problem(LoaderTSP, tsp.create_model, tsp.BASELINE_IDEA, tsp.BASELINE_CODE),
-}
 
 
 def check_same_machine(evaluation: List[Instance], threads: int) -> None:
@@ -77,6 +61,16 @@ def check_same_machine(evaluation: List[Instance], threads: int) -> None:
             )
 
 
+def load_validity(problem: Problem, validity_dir: str = parameters.VALIDITY_DIR) -> List[Instance]:
+    """The problem's validity instances (prepare_validity.py), or [] with a warning if not built."""
+    loader: Loader = problem.loader(validity_dir)
+    if not os.path.exists(os.path.join(loader.folder, parameters.VALIDITY_FILE)):
+        logger.warning(f"no {os.path.join(loader.folder, parameters.VALIDITY_FILE)}: the validity check uses only "
+                       "the validation instances (run prepare_validity.py)")
+        return []
+    return loader.load(parameters.VALIDITY_FILE)
+
+
 def make_solver(args: argparse.Namespace, seed: int = parameters.SEED) -> Solver:
     """The solver of the cut evaluations: work limit, threads, tight cut limits, the run's logs."""
     log_dir: str = os.path.join(args.log_dir, args.run_name)  # logs/ is shared by every machine
@@ -87,13 +81,38 @@ def make_solver(args: argparse.Namespace, seed: int = parameters.SEED) -> Solver
     )
 
 
+def load_test_set(loader: Loader, problem: Problem, level: str = parameters.INSTANCE_LEVEL) -> List[Instance]:
+    """The held-out instances of the end-of-run review at instance `level` (test.pkl or
+    test_<level>.pkl, built by prepare_instances.py)."""
+    filename: str = instance_set(problem, "test", level).filename
+    if not os.path.exists(os.path.join(loader.folder, filename)):
+        raise FileNotFoundError(
+            f"{os.path.join(loader.folder, filename)} is missing (held-out instances of the final review): "
+            f"run prepare_instances.py --instance_level {level}, it only builds the missing sets"
+        )
+    return loader.load(filename)
+
+
+def load_optimality_set(loader: Loader, filename: str) -> List[Instance]:
+    """An optimality set of the gap_work fitness (prepare_instances.py --optimality)."""
+    if not os.path.exists(os.path.join(loader.folder, filename)):
+        raise FileNotFoundError(
+            f"{os.path.join(loader.folder, filename)} is missing (instances the base model solves, for the "
+            "gap_work fitness): run prepare_instances.py --optimality"
+        )
+    return loader.load(filename)
+
+
 def final_review(
-    args: argparse.Namespace, problem: Problem, evaluation: List[Instance], population: Population,
-    run_dir: str,
+    args: argparse.Namespace, problem: Problem, test: List[Instance], population: Population,
+    run_dir: str, optimality: Optional[List[Instance]] = None, filename: str = REVIEW,
 ) -> List[CutReview]:
     """
-    The best cut, the seed cut and the base model under Gurobi seeds 0..review_seeds-1: is the
-    best cut's fitness more than luck? Logged, and saved as <run_dir>/review.json.
+    The best cut, the seed cut and the base model on the held-out `test` instances (never seen by
+    the GA), under Gurobi seeds 0..review_seeds-1: does the best cut generalize, and is its
+    fitness more than luck? `optimality`: held-out instances the base model solves (gap_work
+    runs), for the work to prove optimality. Logged, and saved as <run_dir>/<filename>
+    (review.json; review_run.py --review_level writes review_<level>.json).
     """
     best: Individual = population.best
     first: List[Individual] = population.history[0] if population.history else population.current
@@ -103,17 +122,33 @@ def final_review(
     if best.code != seed_cut.code:
         cuts["best"], fitness["best"] = best.code, best.fitness
     seeds: List[int] = list(range(args.review_seeds))
-    logger.info(f"final review: {', '.join(cuts)} and the base model under Gurobi seeds {seeds}")
+    test_file: str = instance_set(problem, "test", args.instance_level).filename
+    logger.info(f"final review: {', '.join(cuts)} and the base model on the {len(test)} held-out "
+                f"instances of {test_file}, under Gurobi seeds {seeds}")
     reviews: List[CutReview] = review_cuts(
-        problem.base, cuts, evaluation, seeds, lambda s: make_solver(args, seed=s), fitness
+        problem.base, cuts, test, seeds, lambda s: make_solver(args, seed=s), fitness, optimality
     )
     logger.info(format_review(reviews))
-    path: str = os.path.join(run_dir, REVIEW)
+    path: str = os.path.join(run_dir, filename)
     with open(path, "w") as f:
         json.dump({"seeds": seeds, "work_limit": args.work_limit, "threads": args.threads,
+                   "instance_set": test_file, "instance_level": args.instance_level,
+                   "instances": [inst["name"] for inst in test],
+                   "optimality_instances": [inst["name"] for inst in optimality or []],
+                   "fitness_mode": args.fitness_mode,  # the scale of the models' run_fitness
                    "models": [r.to_dict() for r in reviews]}, f, indent=1)
     logger.info(f"review saved to {path}")
     return reviews
+
+
+def pack_run_logs(args: argparse.Namespace) -> None:
+    """logs/<run>/ (one Gurobi log per solve) -> logs/<run>.tar.gz (utils/log_archive.py)."""
+    try:
+        archive: Optional[str] = pack_logs(os.path.join(args.log_dir, args.run_name))
+        if archive:
+            logger.info(f"solve logs packed into {archive}")
+    except Exception as e:  # never hide the run's own end
+        logger.warning(f"could not pack the solve logs: {type(e).__name__}: {e}")
 
 
 def summarize(pop: Population, elapsed: float) -> str:
@@ -135,30 +170,47 @@ def run(args: argparse.Namespace, llm: Optional[LLMClient] = None) -> Population
     """
     problem: Problem = PROBLEMS[args.problem_name]
     loader: Loader = problem.loader(args.data_dir)
-    for filename in (parameters.VALIDATION_FILE, parameters.EVALUATION_FILE):
+    evaluation_file: str = instance_set(problem, "evaluation", args.instance_level).filename
+    for filename in (parameters.VALIDATION_FILE, evaluation_file):
         if not os.path.exists(os.path.join(loader.folder, filename)):
             raise FileNotFoundError(
-                f"{os.path.join(loader.folder, filename)} is missing: run prepare_instances.py first"
+                f"{os.path.join(loader.folder, filename)} is missing: run prepare_instances.py "
+                f"--instance_level {args.instance_level} first"
             )
     validation: List[Instance] = loader.load(parameters.VALIDATION_FILE)
-    evaluation: List[Instance] = loader.load(parameters.EVALUATION_FILE)
+    evaluation: List[Instance] = loader.load(evaluation_file)
     check_same_machine(evaluation, args.threads)
+    check_minimization(problem, validation[0])
+    test: List[Instance] = (load_test_set(loader, problem, args.instance_level)  # fail now, not after the GA
+                            if args.review_seeds > 0 else [])
+    mode: FitnessMode = FitnessMode(args.fitness_mode)
+    optimality: List[Instance] = []
+    optimality_test: List[Instance] = []
+    if mode is FitnessMode.GAP_WORK:
+        optimality = load_optimality_set(loader, parameters.OPTIMALITY_FILE)
+        check_same_machine(optimality, args.threads)  # its base work is compared with the cuts' work
+        if args.review_seeds > 0:
+            optimality_test = load_optimality_set(loader, parameters.OPTIMALITY_TEST_FILE)
 
     if llm is None:
         if args.model_name is None:
             raise ValueError("choose the LLM with --model_name (e.g. qwen3-coder:30b)")
-        options: Dict[str, Any] = {} if args.temperature is None else {"temperature": args.temperature}
-        ollama: OllamaClient = OllamaClient(args.model_name, host=args.ollama_host, options=options)
-        if args.model_name not in ollama.available_models():
-            raise ValueError(f"{args.model_name} is not on the Ollama server {args.ollama_host}")
-        llm = ollama
+        llm = make_llm(args.llm_backend, args.model_name, args.temperature, args.ollama_host)
 
     overlap: List[int] = sorted(set(args.fitness_seeds) & set(range(args.review_seeds)))
-    if overlap:
+    if overlap and mode.solves_mip:
         logger.warning(f"fitness seeds {overlap} are also review seeds: the review is no longer independent")
     scoring: List[Solver] = [make_solver(args, seed=s) for s in args.fitness_seeds]  # one per seed
-    evaluator: CutEvaluator = CutEvaluator(problem.base, validation, evaluation, scoring[0], scoring)
-    prompts: Prompts = Prompts(inspect.getsource(problem.base), variant=args.prompt_variant)
+    if mode is FitnessMode.LP:
+        scoring = scoring[:1]  # deterministic LP: one solver, no extra base solves
+    validity: List[Instance] = load_validity(problem, args.validity_dir)
+    logger.info(f"validity check: {len(validation)} validation + {len(validity)} validity instances")
+    evaluator: CutEvaluator = CutEvaluator(problem.base, validation, evaluation, scoring[0], scoring, mode,
+                                           validity=validity, optimality=optimality)
+    prompts: Prompts = Prompts(inspect.getsource(problem.base), variant=args.prompt_variant,
+                               fitness_mode=args.fitness_mode,  # the LLM is told how it is scored
+                               problem=problem.name,  # and what the problem is
+                               instance_level=args.instance_level)  # and the sizes it is scored on
 
     run_dir: str = os.path.join(args.runs_dir, args.run_name)  # everything about this run
     os.makedirs(run_dir, exist_ok=True)
@@ -210,7 +262,7 @@ def run(args: argparse.Namespace, llm: Optional[LLMClient] = None) -> Population
             generation_done()
         if args.review_seeds > 0:
             status.update(phase="review")
-            final_review(args, problem, evaluation, population, run_dir)
+            final_review(args, problem, test, population, run_dir, optimality_test)
     except KeyboardInterrupt:  # Ctrl-C, or SIGTERM (see __main__)
         status.update(state=STOPPED)
         write_summary(run_dir, population)
@@ -219,6 +271,8 @@ def run(args: argparse.Namespace, llm: Optional[LLMClient] = None) -> Population
         status.update(state=FAILED, error=f"{type(e).__name__}: {e}")
         write_summary(run_dir, population)
         raise
+    finally:  # finished, stopped or failed: the run's solve logs become one file
+        pack_run_logs(args)
     status.update(state=FINISHED, phase=None)
     logger.info(f"summary: {write_summary(run_dir, population)}")
 

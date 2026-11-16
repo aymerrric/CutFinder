@@ -1,0 +1,16 @@
+# What the LLM is told about the CWLP (keys explained in tsp.yaml). No known strong cut here.
+
+problem: the Capacitated Warehouse Location Problem (CWLP)
+
+solution: solution
+
+description: |-
+  - Warehouses can be opened, at a fixed cost f[j] each, to serve customers. Every customer i has
+    a demand d[i] that must be served entirely by ONE open warehouse (unsplittable), and the
+    demand served by warehouse j cannot exceed its capacity u[j]. c[i, j] is the cost of serving
+    all of customer i's demand from warehouse j. The objective is to minimize the opening costs
+    plus the assignment costs.
+  - In our instances the total capacity is 1.1 to 1.3 times the total demand, and the capacities
+    are close to each other (within +-10% of their average).
+  - The model: x[i, j] = 1 if customer i is served by warehouse j, y[j] = 1 if warehouse j is
+    open (I = customers, J = warehouses, both numbered from 1).

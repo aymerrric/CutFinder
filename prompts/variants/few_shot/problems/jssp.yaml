@@ -1,0 +1,21 @@
+# Variant "few_shot", JSSP: examples of refused answers and of an accepted one (fills {examples}).
+examples: |-
+  Examples of answers that were REFUSED, and why (for a JSSP model with start times S[j, k],
+  makespan Cmax and orderings y[j1, k1, j2, k2]):
+    - Repeating constraints the model already has, e.g. the precedences
+      S[j, k + 1] >= S[j, k] + p[j, k] again: refused as USELESS (the LP already satisfies them).
+    - "Job 0 runs first on every machine": refused as INVALID (it removes optimal schedules that
+      do not start with job 0).
+    - A loop over all orders of the jobs on a machine: refused as TOO SLOW (20! orders).
+  Example of an answer that was ACCEPTED:
+    IDEA: A machine processes its operations one at a time, so the makespan is at least the total
+    processing time of each machine. The LP relaxation, whose big-M disjunctions are almost free,
+    ignores it.
+    CODE:
+    ```python
+    Cmax, p = m._Cmax, m._p
+    for r in range(n_machines):
+        load = sum(p[j, k] for (j, k) in p if machines[j][k] == r)
+        m.addConstr(Cmax >= load, name=f"machine_load[{r}]")
+    ```
+  Your answer must be a DIFFERENT cut from these examples.

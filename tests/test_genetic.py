@@ -237,3 +237,34 @@ def test_an_initial_cut_repeating_the_generation_is_refused_without_solving() ->
     assert records[1]["reason"].startswith("duplicate") and len(evaluated) == 3  # seed, 10, 11
     retry: str = ga.llm.received[2][-1]["content"]  # 3rd answer asked: after the duplicate
     assert "same cut as one already in the generation" in retry
+
+
+def test_an_invalid_cut_is_answered_with_the_invalid_cut_message() -> None:
+    def strict(code: str) -> float:
+        if "bad" in code:
+            raise CutRejected("removes the optimal solution of la05", invalid=True)
+        if "slow" in code:
+            raise CutRejected("too slow")
+        return evaluate(code)
+
+    slow: str = BAD_CUT.replace("bad", "slow")
+    ga: GeneticAlgorithm = GeneticAlgorithm(Population(2), FakeLLM([BAD_CUT, slow, reply(9)]), PROMPTS, strict, seed=0)
+    ga.initialize(BASELINE)
+    after_invalid: str = ga.llm.received[1][-1]["content"]
+    after_slow: str = ga.llm.received[2][-1]["content"]
+    assert "NOT VALID" in after_invalid and "la05" in after_invalid
+    assert "NOT VALID" not in after_slow and "too slow" in after_slow
+
+
+def test_a_used_up_daily_quota_stops_the_run_instead_of_copying_parents() -> None:
+    from llm.base import QuotaExhausted
+
+    class NoQuota(FakeLLM):
+        def _send(self, messages):  # type: ignore[override]
+            raise QuotaExhausted("daily quota used up")
+
+    records: List[Any] = []
+    ga: GeneticAlgorithm = GeneticAlgorithm(Population(2), NoQuota([]), PROMPTS, evaluate, seed=0, record=records.append)
+    with pytest.raises(QuotaExhausted):
+        ga.initialize(BASELINE)
+    assert records == []  # no attempt recorded as failed, no copy made

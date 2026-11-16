@@ -3,6 +3,7 @@ gurobi.lic
 *.lic
 configs/api_tokens.yaml
 .env
+llm_keys.env
 # Remote machines: host names, user names, GPU reports
 computer_connection/
 
@@ -12,7 +13,7 @@ __pycache__/
 *.pyc
 
 # Generated files (folders must exist: mkdir -p data/tsp cache logs)
-data/
+/data/
 cache/
 logs/
 runs/
@@ -20,3 +21,18 @@ runs/
 # Editor / OS
 .vscode/
 .DS_Store
+
+# Lean: Mathlib and build outputs (lean/.lake, about 6 GB), proof attempts
+lean/.lake/
+lean/work/
+
+# Private notes: every Markdown document except the READMEs (results, plans, TODO, reports)
+*.md
+!README.md
+!**/README.md
+
+# Claude / agent instructions and settings
+CLAUDE.md
+CLAUDE.local.md
+AGENTS.md
+.claude/

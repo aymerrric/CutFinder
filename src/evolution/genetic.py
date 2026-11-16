@@ -22,7 +22,13 @@ logger: logging.Logger = logging.getLogger(__name__)
 
 
 class CutRejected(Exception):
-    """The cut cannot be used (code error, invalid cut, ...). The message is shown to the LLM."""
+    """The cut cannot be used (code error, invalid cut, ...). The message is shown to the LLM.
+    invalid: the cut removes optimal (or all) solutions; the LLM then gets the invalid-cut retry
+    message (prompts/common.yaml retry_invalid_user) instead of the generic one."""
+
+    def __init__(self, message: str, invalid: bool = False) -> None:
+        super().__init__(message)
+        self.invalid: bool = invalid
 
 
 class GeneticAlgorithm:
@@ -234,7 +240,7 @@ class GeneticAlgorithm:
         """Log and record a refused answer, and send the reason back to the LLM."""
         logger.info(f"{operator}: attempt {attempt}/{attempts} rejected: {error}")
         self._record(record, outcome=outcome, reason=str(error))
-        messages.append(self.prompts.retry_message(str(error)))
+        messages.append(self.prompts.retry_message(str(error), invalid=getattr(error, "invalid", False)))
 
     def _record(self, record: Attempt, **fields: object) -> None:
         if self.record is not None:

@@ -1,0 +1,22 @@
+# Variant "few_shot", CWLP: examples of refused answers and of an accepted one (fills {examples}).
+examples: |-
+  Examples of answers that were REFUSED, and why (for a CWLP model with assignments x[i, j] and
+  openings y[j]):
+    - Repeating constraints the model already has, e.g. the capacity constraints
+      sum_i d[i] * x[i, j] <= u[j] * y[j] again: refused as USELESS (the LP already satisfies them).
+    - "The cheapest warehouse to open is always open": refused as INVALID (it removes optimal
+      solutions that do not open it).
+    - A loop over all subsets of customers: refused as TOO SLOW (2^500 subsets).
+  Example of an answer that was ACCEPTED:
+    IDEA: The open warehouses must hold the total demand, so at least k_min of them are open, k_min
+    being the smallest k whose k largest capacities sum to the total demand. The LP can open
+    fractions of warehouses, which this integer count forbids.
+    CODE:
+    ```python
+    y, d, u = m._y, m._d, m._u
+    total = sum(d.values())
+    caps = sorted(u.values(), reverse=True)
+    k_min = next(k for k in range(1, len(caps) + 1) if sum(caps[:k]) >= total)
+    m.addConstr(y.sum() >= k_min, name="min_open")
+    ```
+  Your answer must be a DIFFERENT cut from these examples.

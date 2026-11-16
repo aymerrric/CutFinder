@@ -35,8 +35,9 @@ class FakeOllama(BaseHTTPRequestHandler):
             self.send_response(404)
             self.end_headers()
             return
+        content: str = "" if body["messages"][-1]["content"] == "think only" else "IDEA: i\nCODE: m.addConstr(A)"
         answer: bytes = json.dumps(
-            {"message": {"role": "assistant", "content": "IDEA: i\nCODE: m.addConstr(A)"},
+            {"message": {"role": "assistant", "content": content, "thinking": "the analysis, then ```lean\nproof\n```"},
              "done_reason": "stop", "prompt_eval_count": 3, "eval_count": 5, "total_duration": 10**9}
         ).encode()
         self.send_response(200)
@@ -99,3 +100,9 @@ def test_live_server_follows_the_format() -> None:
     )
     idea, code = parse_reply(reply)
     assert idea and "print" in code
+
+
+def test_an_answer_left_in_the_thinking_field_is_returned(server: str) -> None:
+    client = OllamaClient("known", host=server, max_retries=1)
+    assert client.send([{"role": "user", "content": "think only"}]) == "the analysis, then ```lean\nproof\n```"
+    assert client.send(MESSAGES) == "IDEA: i\nCODE: m.addConstr(A)"  # a normal answer: the thinking is ignored

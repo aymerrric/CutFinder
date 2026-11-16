@@ -1,0 +1,18 @@
+# Variant "few_shot", corridor: examples of refused answers and of an accepted one (fills {examples}).
+examples: |-
+  Examples of answers that were REFUSED, and why (for the corridor model with bought cells x[i],
+  flows f[i, j] and source flow y):
+    - Repeating constraints the model already has, e.g. f[i, j] <= n * x[j] again: refused as
+      USELESS (the LP already satisfies them).
+    - "The corridor is a shortest path between the reserves": refused as INVALID (with spare budget
+      the best corridor also buys useful cells off the path).
+    - A loop over every subset of cells to forbid disconnected ones: refused as TOO SLOW (2^n subsets).
+  Example of an answer that was ACCEPTED:
+    IDEA: Flow only leaves bought cells: a cell that is not bought keeps nothing and passes nothing
+    on, so f[i, j] <= n * x[i] for every arc (i, j), like the given f[i, j] <= n * x[j].
+    CODE:
+    ```python
+    x, f, n = m._x, m._f, len(m._nodes)
+    m.addConstrs((f[i, j] <= n * x[i] for (i, j) in m._arcs), name="flow_out")
+    ```
+  Your answer must be a DIFFERENT cut from these examples.
