@@ -34,10 +34,9 @@ def create_model(
     u: Dict[Arc, float], d: Dict[int, float], O: Dict[int, int], D: Dict[int, int],
 ) -> gp.Model:
     """
-    Multi-Commodity capacitated fixed-charge Network Design, the compact arc-based formulation of
-    the paper (Appendix F.2, Eq. MCND; same as the reference mcnd.yaml): open arcs and route every
-    commodity from its origin to its destination within the capacities of the open arcs, at
-    minimum opening + routing cost.
+    Multi-Commodity capacitated fixed-charge Network Design, the compact arc-based formulation:
+    open arcs and route every commodity from its origin to its destination within the capacities
+    of the open arcs, at minimum opening + routing cost.
 
     Arguments: N nodes, A directed arcs, K commodities, c[i, j] cost per unit of flow on arc
     (i, j), f[i, j] cost of opening it, u[i, j] its capacity, d[k] demand of commodity k, O[k] /
@@ -47,9 +46,8 @@ def create_model(
         x[i, j, k] >= 0 : flow of commodity k on arc (i, j)
         y[i, j] binary  : 1 if arc (i, j) is open
 
-    Flow conservation as in the paper: the flow leaving the origin equals d[k], the flow entering
-    the destination equals d[k], and every other node is balanced. (The textbook form writes
-    out - in = d[k] at the origin; with positive unit costs both have the same optimal solutions.)
+    Flow conservation on the net flow (out - in): d[k] at the origin, -d[k] at the destination
+    (written in - out = d[k]), 0 at every other node.
     Capacity: the total flow on an arc is at most u[i, j] if it is open, 0 otherwise (aggregated:
     the strong linking x[i, j, k] <= min(u[i, j], d[k]) * y[i, j] is NOT in the model).
 
@@ -75,9 +73,9 @@ def create_model(
         out: gp.LinExpr = gp.quicksum(x[i, j, k] for j in successors[i])
         into: gp.LinExpr = gp.quicksum(x[j, i, k] for j in predecessors[i])
         if i == O[k]:
-            return out, d[k]
+            return out - into, d[k]
         if i == D[k]:
-            return into, d[k]
+            return into - out, d[k]
         return out - into, 0.0
 
     for i in N:
@@ -90,4 +88,32 @@ def create_model(
     m._x, m._y, m._N, m._A, m._K = x, y, N, A, K
     m._c, m._f, m._u, m._d, m._O, m._D = c, f, u, d, O, D
     m.update()  # apply the pending changes so the model can be inspected right away
+    return m
+
+
+def create_model_paper(
+    N: List[int], A: List[Arc], K: List[int], c: Dict[Arc, float], f: Dict[Arc, float],
+    u: Dict[Arc, float], d: Dict[int, float], O: Dict[int, int], D: Dict[int, int],
+) -> gp.Model:
+    """
+    The paper's formulation (Appendix F.2, Eq. MCND; same as the reference mcnd.yaml), kept for
+    comparison only (create_model is the model of every run and benchmark since 16 Nov): the
+    GROSS flow leaving O[k] is d[k] and the GROSS flow entering D[k] is d[k]; the flow into O[k]
+    and out of D[k] is free. A commodity can then loop at both ends (O -> a -> O and
+    D -> b -> D, d[k] units each) with no flow from O[k] to D[k], and these loops can cost less
+    than a real path: on r16.2 the optimum is 239144 here against 239500 with create_model
+    (learnt_results.md 12.7). So cut-set inequalities are invalid for this model.
+    Built as create_model with the in-flow of O[k] and the out-flow of D[k] removed from their rows.
+    """
+    m: gp.Model = create_model(N, A, K, c, f, u, d, O, D)
+    x: gp.tupledict = m._x
+    for k in K:
+        origin: gp.Constr = m.getConstrByName(f"flow[{O[k]},{k}]")
+        destination: gp.Constr = m.getConstrByName(f"flow[{D[k]},{k}]")
+        for (i, j) in A:
+            if j == O[k]:
+                m.chgCoeff(origin, x[i, j, k], 0.0)
+            if i == D[k]:
+                m.chgCoeff(destination, x[i, j, k], 0.0)
+    m.update()
     return m

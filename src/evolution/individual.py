@@ -28,6 +28,9 @@ class Individual:
     generator: str = INIT  # what created it: INIT, SEED, ELITE, COPY, or a mutation / crossover
     parents: List[str] = field(default_factory=list)  # ids of the parents (empty for INIT)
     id: str = field(default_factory=lambda: uuid4().hex)  # unique, kept across save / load
+    # what the validity check showed (evolution/evaluator.py: "keeps_optima" or "safe"); None =
+    # not recorded (runs before 16 Nov 2026, or an evaluator that does not report it)
+    claim: Optional[str] = None
 
     @property
     def evaluated(self) -> bool:
@@ -46,7 +49,8 @@ class Individual:
         if generator not in COPY_GENERATORS:
             raise ValueError(f"generator must be one of {COPY_GENERATORS}, got {generator!r}")
         return Individual(
-            idea=self.idea, code=self.code, fitness=self.fitness, generator=generator, parents=[self.id]
+            idea=self.idea, code=self.code, fitness=self.fitness, generator=generator, parents=[self.id],
+            claim=self.claim,
         )
 
     def to_dict(self) -> Dict[str, Any]:

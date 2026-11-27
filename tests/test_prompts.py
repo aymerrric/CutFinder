@@ -32,7 +32,7 @@ MODEL_CODE: str = inspect.getsource(create_model)
 
 
 def test_common_has_every_template() -> None:
-    assert set(COMMON) == {"system", "mutation_user", "crossover_user", "retry_user", "retry_invalid_user"}
+    assert set(COMMON) == {"role", "system", "mutation_user", "crossover_user", "retry_user", "retry_invalid_user"}
 
 
 def test_operators_match_the_reference() -> None:
@@ -42,7 +42,8 @@ def test_operators_match_the_reference() -> None:
 
 @pytest.mark.parametrize("task", list(MUTATIONS.values()) + list(CROSSOVERS.values()))
 def test_system_prompt_fills_for_every_operator(task: str) -> None:
-    prompt: str = COMMON["system"].format(task=task, model_code=MODEL_CODE, scoring=FITNESS["gap"].format(**TSP), **TSP)
+    prompt: str = COMMON["system"].format(task=task, role=COMMON["role"].format(**TSP), model_code=MODEL_CODE,
+                                          scoring=FITNESS["gap"].format(**TSP), **TSP)
     assert task in prompt and MODEL_CODE in prompt
     assert "{" not in prompt.replace(MODEL_CODE, "")  # no placeholder left unfilled
     assert "Pyomo" not in prompt
@@ -238,7 +239,7 @@ def test_the_llm_is_told_the_sizes_of_its_instance_level() -> None:
 def test_templates_say_nothing_about_the_tsp() -> None:
     """Everything problem-specific is in prompts/problems/ (or a variant's problems/)."""
     for root, _, files in os.walk(parameters.PROMPTS_DIR):
-        if os.path.basename(root) == "problems":
+        if os.path.basename(root) in ("problems", "anonymous"):  # anonymous/: the words to hide
             continue
         for name in files:
             if name.endswith(".yaml"):
@@ -302,3 +303,24 @@ def test_an_invalid_cut_gets_its_own_retry_message() -> None:
     generic: str = prompts.retry_message("removes the optimum of la05")["content"]
     assert "removes the optimum of la05" in invalid and "NOT VALID" in invalid and "prove" in invalid
     assert "NOT VALID" not in generic  # other refusals (code error, too slow...) keep the usual text
+
+
+def test_a_hidden_problem_is_never_named() -> None:
+    from evolution.prompts import strip_comments
+    import inspect
+    from models.tsp import create_model
+    prompts: Prompts = Prompts(inspect.getsource(create_model), problem="tsp", hide_problem=True)
+    conversations = [prompts.sample_messages(), prompts.recall_messages(["a tour idea"]),
+                     prompts.mutation_messages("Lifted", PARENT1, 1.0)]
+    for conversation in conversations:
+        text: str = "\n".join(message["content"] for message in conversation).lower()
+        for word in ("cities", "city", "tour", "tsp", "mtz", "salesman", "depot", "traveling"):
+            assert re.search(rf"(?<![a-z]){word}(?![a-z])", text) is None, word
+    assert "def create_model(n: int, c: Costs)" in prompts.model_code and '"""' not in prompts.model_code
+    assert "nodes" in prompts.retry_message("removes every tour of 5 cities")["content"]
+    assert "#" not in strip_comments("def f():\n    # a comment\n    return 1  # another\n")
+
+
+def test_hiding_a_problem_needs_its_anonymous_file() -> None:
+    with pytest.raises(FileNotFoundError, match="anonymous"):
+        Prompts(MODEL_CODE, problem="jssp", hide_problem=True)

@@ -123,6 +123,18 @@ def test_status_file_follows_the_run(data_dir: str, tmp_path: Path) -> None:
     assert os.listdir(proposals) == ["child_02_attempt_1.json"]
 
 
+def test_status_file_records_what_the_llm_reports_of_itself(data_dir: str, tmp_path: Path) -> None:
+    class Named(FakeLLM):
+        def identity(self):
+            return {"llm_model_id": "claude-sonnet-5-5", "llm_effort": "default"}
+
+    run(make_args(data_dir, tmp_path), llm=Named([TWO_CYCLE_REPLY] * 5))
+    status: Status = read_status(os.path.join(tmp_path, "test_run", "status.json"))
+    assert status["llm_model_id"] == "claude-sonnet-5-5" and status["llm_effort"] == "default"
+    run(make_args(data_dir, tmp_path / "plain"), llm=FakeLLM([TWO_CYCLE_REPLY] * 5))  # other LLMs add nothing
+    assert "llm_model_id" not in read_status(os.path.join(tmp_path / "plain", "test_run", "status.json"))
+
+
 def test_interrupted_run_is_marked_stopped(data_dir: str, tmp_path: Path) -> None:
     with pytest.raises(KeyboardInterrupt):
         run(make_args(data_dir, tmp_path), llm=InterruptedLLM())
@@ -363,3 +375,25 @@ def test_a_run_with_the_gap_work_fitness(data_dir: str, tmp_path: Path) -> None:
                                          os.path.join(tmp_path, "test_run", "population.json"))
     with pytest.raises(ValueError, match="pass --fitness_mode gap_work"):  # reviewed like it ran
         review_run(args)
+
+
+def test_a_search_without_ga_spends_its_budget_and_resumes(data_dir: str, tmp_path: Path) -> None:
+    other: str = TWO_CYCLE_REPLY.replace("i < j", "j > i")  # the same cut, written another way
+    pop: Population = run(make_args(data_dir, tmp_path, "--search", "sample", "--llm_calls", "2", "--hide_problem"),
+                          llm=FakeLLM([TWO_CYCLE_REPLY, other]))
+    assert [ind.generator for ind in pop.current] == ["sample", "copy"]  # the second batch, completed
+    assert pop.generation == 1 and [ind.generator for ind in pop.history[0]] == [SEED, "sample"]
+    path: str = os.path.join(tmp_path, "test_run", "population.json")
+    llm: FakeLLM = FakeLLM([other.replace("j > i", "i < j and True")] * 2)
+    pop = run(make_args(data_dir, tmp_path, "--search", "sample", "--llm_calls", "4", "--population_file", path), llm=llm)
+    assert len(llm.received) == 2 and pop.generation == 2  # 2 calls were already spent
+
+
+def test_a_search_without_ga_needs_a_budget(data_dir: str, tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="llm_calls"):
+        run(make_args(data_dir, tmp_path, "--search", "recall"), llm=FakeLLM([]))
+
+
+def test_the_run_name_tells_a_search_without_ga() -> None:
+    args = arg_parser(["--model_name", "muse-spark-1.3-contributor", "--search", "sample", "--hide_problem"])
+    assert make_run_name(args, "hibou").startswith("tsp_muse-spark-1.3-contributor-sample-hidden_hibou_")

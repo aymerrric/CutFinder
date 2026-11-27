@@ -158,3 +158,10 @@ def test_daily_quota_messages() -> None:
     from llm.openai_compatible import daily_quota
     assert daily_quota('{"quotaId": "GenerateRequestsPerDayPerProjectPerModel-FreeTier"}')
     assert daily_quota("You have exceeded your requests per day") and not daily_quota("slow down")
+
+
+def test_a_spend_limit_stops_at_once() -> None:
+    from llm.openai_compatible import spend_limit
+    muse: str = '{"error":{"code":"monthly_spend_limit_reached","message":"Monthly spend limit reached."}}'
+    assert spend_limit(402, muse) and spend_limit(402, "") and spend_limit(429, '{"code": "insufficient_quota"}')
+    assert not spend_limit(429, "slow down") and not spend_limit(503, "overloaded")

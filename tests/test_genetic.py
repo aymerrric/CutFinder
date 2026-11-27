@@ -268,3 +268,23 @@ def test_a_used_up_daily_quota_stops_the_run_instead_of_copying_parents() -> Non
     with pytest.raises(QuotaExhausted):
         ga.initialize(BASELINE)
     assert records == []  # no attempt recorded as failed, no copy made
+
+
+def test_the_claim_of_each_accepted_cut_is_stored_and_recorded() -> None:
+    records: List[Any] = []
+    pop: Population = make_population([1.0, 2.0])
+    ga: GeneticAlgorithm = GeneticAlgorithm(pop, FakeLLM([reply(k) for k in range(10, 20)]), PROMPTS, evaluate,
+                                            seed=0, elitism_ratio=0.5, record=records.append,
+                                            claim_of=lambda code: "safe" if "cut_1" in code else "keeps_optima")
+    ga.generation_step()
+    child: Individual = pop.current[1]
+    assert child.claim == ("safe" if "cut_1" in child.code else "keeps_optima")
+    assert records[-1]["claim"] == child.claim
+    assert pop.current[0].copy(COPY).claim == pop.current[0].claim  # copies keep it
+    assert Individual.from_dict({"idea": "i", "code": "c"}).claim is None  # old population.json files
+
+
+def test_without_claim_of_no_claim_is_stored() -> None:
+    pop: Population = make_population([1.0, 2.0])
+    make_ga(pop, [reply(k) for k in range(10, 20)], elitism_ratio=0.5).generation_step()
+    assert pop.current[1].claim is None

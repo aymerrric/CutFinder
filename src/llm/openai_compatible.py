@@ -25,6 +25,15 @@ def daily_quota(text: str) -> bool:
     return "perday" in lowered or "per day" in lowered or "daily" in lowered
 
 
+def spend_limit(code: int, text: str) -> bool:
+    """The account's money is used up: HTTP 402 (Payment Required), or a body naming a spend limit
+    or missing credit. 22 Nov: Muse answered 402 "monthly_spend_limit_reached" to every call, the
+    runs took it for a passing error and filled 20 generations with copies of the seed cut."""
+    lowered: str = text.lower()
+    return code == 402 or any(w in lowered for w in ("spend_limit", "spend limit", "insufficient_quota",
+                                                     "insufficient credit", "credit balance"))
+
+
 def retry_after(value: Optional[str], default: float) -> float:
     """Seconds of a Retry-After header (a number; an HTTP date or nothing gives `default`)."""
     try:
@@ -109,6 +118,8 @@ class OpenAICompatibleClient(LLMClient):
             answer: Dict[str, Any] = self._request("/chat/completions", body, timeout=self.timeout)
         except urllib.error.HTTPError as e:
             text: str = e.read().decode(errors="replace")
+            if spend_limit(e.code, text):
+                raise QuotaExhausted(f"{self.model}: spend limit or credit used up (HTTP {e.code}): {text[:300]}") from e
             if e.code == 429 and daily_quota(text):
                 raise QuotaExhausted(f"{self.model}: daily quota used up (HTTP 429): {text[:300]}") from e
             if e.code == 429 or e.code in SERVER_BUSY:  # rate limit or overload: wait, then LLMClient retries

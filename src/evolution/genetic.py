@@ -13,6 +13,7 @@ from utils import parameters
 # Fitness of a cut, from its code. Raises CutRejected when the cut cannot be used.
 # (Implemented by the cut-evaluation step: run the code, check validity, solve with Solver.)
 Evaluator = Callable[[str], float]
+ClaimOf = Callable[[str], Optional[str]]  # code of an accepted cut -> its claim (CutEvaluator.claim_of)
 # Called before each child with (generation being built, child number from 1): progress reports.
 Progress = Callable[[int, int], None]
 # Called with every LLM attempt, accepted or not (see evolution/recorder.py).
@@ -54,7 +55,10 @@ class GeneticAlgorithm:
         seed: Optional[int] = None,
         progress: Optional[Progress] = None,
         record: Optional[Recorder] = None,
+        claim_of: Optional[ClaimOf] = None,
     ) -> None:
+        """claim_of: gives the claim of each accepted cut (CutEvaluator.claim_of), stored on the
+        individual and in its attempt record; None = not recorded."""
         for name, value in [("elitism_ratio", elitism_ratio), ("crossover_rate", crossover_rate)]:
             if not 0 <= value <= 1:
                 raise ValueError(f"{name} must be in [0, 1], got {value}")
@@ -70,6 +74,8 @@ class GeneticAlgorithm:
         self.rng: random.Random = random.Random(seed)  # local RNG: reproducible with `seed`
         self.progress: Optional[Progress] = progress
         self.record: Optional[Recorder] = record
+        self.claim_of: Optional[ClaimOf] = claim_of
+        self.llm_calls: int = 0  # LLM requests sent (each attempt is one)
         self.building: int = 0  # generation and child being built (for the records)
         self.child: int = 0
 
@@ -90,7 +96,8 @@ class GeneticAlgorithm:
         except CutRejected as e:
             raise ValueError(f"the baseline cut is rejected: {e}") from e
         seed: Individual = Individual(
-            idea=baseline.idea, code=baseline.code, fitness=fitness, generator=SEED
+            idea=baseline.idea, code=baseline.code, fitness=fitness, generator=SEED,
+            claim=self._claim(baseline.code),
         )
         generation: List[Individual] = [seed]
         while len(generation) < self.population.size:
@@ -190,10 +197,11 @@ class GeneticAlgorithm:
                 "operator": operator, "parents": [p.id for p in parents],
                 "messages": [dict(message) for message in messages],  # the conversation sent
                 "reply": None, "idea": None, "code": None, "outcome": None, "reason": None,
-                "fitness": None, "individual": None, "llm_seconds": None, "eval_seconds": None,
+                "fitness": None, "individual": None, "claim": None, "llm_seconds": None, "eval_seconds": None,
                 "time": time.time(),
             }
             start: float = time.time()
+            self.llm_calls += 1
             try:
                 reply: str = self.llm.send(messages)
             except LLMError as e:  # the LLM cannot be reached: asking again would not help
@@ -229,9 +237,10 @@ class GeneticAlgorithm:
                 fitness=fitness,
                 generator=operator,
                 parents=[p.id for p in parents],
+                claim=self._claim(code),
             )
             self._record(record, outcome=ACCEPTED, fitness=fitness, individual=child.id,
-                         eval_seconds=time.time() - start)
+                         eval_seconds=time.time() - start, claim=child.claim)
             return child
         return None
 
@@ -246,6 +255,10 @@ class GeneticAlgorithm:
         if self.record is not None:
             record.update(fields)
             self.record(record)
+
+    def _claim(self, code: str) -> Optional[str]:
+        """The claim of the accepted cut `code`, None if no claim_of was given."""
+        return self.claim_of(code) if self.claim_of is not None else None
 
     def _best_fitness(self) -> float:
         assert self.population.best is not None  # set with the first generation

@@ -124,6 +124,7 @@ My_evo_cut/
 │   ├── EvoCut/Cuts/TspSeed.lean  # the TSP seed cut proved by hand: the reference certificate, shown to the LLM
 │   └── work/              # folders of the Claude Code agent (git-ignored)
 ├── cuts/<problem>/paper_sage.py  # the paper's selected cut family (Appendix F) as cut code
+├── cuts/<problem>/textbook.py    # the literature's cuts (no LLM): the human reference of the benchmark
 ├── cuts/tsp/invalid_position_bound.py  # a cut invalid for every n: the control of prove_cut.py
 ├── prompts/               # LLM prompts (YAML, versioned)
 │   ├── common.yaml        # shared system template + user message templates
@@ -158,7 +159,10 @@ My_evo_cut/
     ├── review_run.py      # script: the final review for a saved run (no LLM)
     ├── check_run_cuts.py  # script: re-check the best cut of saved runs with the validity instances
     ├── prove_cut.py       # script: prove a cut valid in Lean 4 with an LLM (runs/proofs/<problem>/<label>/)
+    ├── falsify_cut.py     # script: counterexample search on tiny instances (runs/falsify/*.jsonl)
+    ├── select_cuts.py     # script: a run's top cuts on the selection and test sets (runs/<run>/selection.json)
     ├── proving/
+    │   ├── falsify.py     # falsify(): REFUTED / SAFE_NOT_VALID / NO_COUNTEREXAMPLE on tiny Lean-compatible instances
     │   ├── lean.py        # run the Lean compiler on a file, read its messages, axioms, refused words
     │   ├── problems.py    # LEAN_PROBLEMS: the Lean formulation of each problem + its data assumptions, checked in Python
     │   ├── certificate.py # the Lean files of a cut and verify: when a proof is a certificate
@@ -190,7 +194,7 @@ My_evo_cut/
     │   ├── corridor.py    # create_model(nodes, edges, reserves, cost, utility, budget): wildlife corridor, single-commodity flow (negated objective) + BASELINE cut (flow leaves only bought cells)
     │   ├── gisp.py        # create_model(nodes, permanent, removable, weight, cost): GISP (negated objective) + BASELINE cut (triangles with one removable edge)
     │   ├── mclp.py        # create_model(I, J, Ni, a, P): Maximal Covering Location (negated objective); seed cut not chosen yet
-    │   └── transforms.py  # with_cut / relaxed / fixed: problem-independent model transformations
+    │   └── transforms.py  # with_cut / relaxed / fixed / with_stops: problem-independent model transformations
     ├── solvers/
     │   └── solver.py      # Solver: problem-independent, compares formulations, logs, stores results
     ├── llm/
@@ -204,7 +208,7 @@ My_evo_cut/
         ├── individual.py  # Individual: one cut (idea, code, fitness, generator, parents, id)
         ├── population.py  # Population: fixed-size current generation, history, best known, save/load
         ├── prompts.py     # Prompts: conversations from prompts/*.yaml; parse_reply: IDEA/CODE
-        ├── evaluator.py   # CutEvaluator: validity, usefulness, work-based fitness of a cut (gap, lp, gap_work)
+        ├── evaluator.py   # CutEvaluator: validity (stored optimum, else safe re-solve), usefulness, work-based fitness (gap, lp, gap_work)
         ├── recorder.py    # AttemptRecorder: every LLM proposal saved in runs/<run>/llm/gen_<k>/
         ├── summary.py     # write_summary: runs/<run>/summary.md, built from the run folder
         ├── report.py      # report over several runs, grouped by LLM, fitness mode and instance level; between-LLM tables
@@ -1527,6 +1531,13 @@ paper's development sets are random too; only this final test differs.
   published family only (the paper's instantiated version adds first/last indicator variables,
   described too briefly to rebuild). SAGE-MCND is a reconstruction (Step 37: the paper's zone and
   bundle sampling is not given). `tests/test_paper_cuts.py` checks that each keeps the optimum.
+- **The textbook cuts** (`cuts/<problem>/textbook.py`, 17 Nov), the human reference (no LLM):
+  what an OR practitioner adds to these models from the literature. TSP: lifted MTZ and lifted
+  position bounds (Desrochers-Laporte 1991) + 2-cycles (SAGE-TSP contains all of it). CWLP: strong
+  linking x[i, j] <= y[j], total capacity, x = 0 when d > u. JSSP: heads and tails, longest job,
+  one-machine bound. MCND: strong linking x[a, k] <= min(u, d[k]) y[a] (Gendron-Crainic-Frangioni).
+  GISP: greedy maximal clique inequalities on the permanent edges. Each keeps the stored optimum
+  on every validity instance (learnt_results.md 12.9) and in `tests/test_paper_cuts.py`.
 - **Cost**: 2000 s × 2 solves per instance (the base once per CPU model, reused by every cut):
   170 instances ≈ 94 h for the base, the same per cut, so it is spread over the fleet:
   `fleet.py benchmark TARGETS -- <benchmark_cut.py arguments>` gives each free machine its
@@ -1928,6 +1939,63 @@ Not done: MCND, IMO6, GISP and corridor have no Lean model yet; the proofs are n
 end of a run; a failed proof is not yet fed back to the GA; nothing checks the statement against
 the code on concrete instances (it would need the Lean models over a computable field).
 
+### Step 42: A safe validity check (re-solve when the stored optimum is removed)
+EvoCut's validity check fixes the variables to ONE stored optimal solution and refuses any cut
+that removes it. That refuses every **safe** cut that is not valid (a symmetry-breaking cut keeps
+another optimum of the same cost; `SafeCut` in `lean/EvoCut/Common.lean`), and scheduling
+problems have many optima (`learnt_results.md` 2.6). Our check now differs from EvoCut's:
+
+1. **Fast first pass, unchanged:** the model with the cut, fixed to the stored optimum. Kept →
+   nothing more to do on that instance (no solve).
+2. **Re-solve only when it fails** (`CutEvaluator._check_safe`): the instance is solved with the cut.
+3. **Early stops** (`models/transforms.py` `with_stops`): `BestObjStop` = the optimum z* (a solution
+   of cost z* found: the cut is safe there), `BestBdStop` = z* (a bound above z* proved: invalid),
+   `Cutoff` = z* (every node whose own bound passes z* is pruned, so an invalid cut ends with status
+   `CUTOFF` without Gurobi proving its worse optimum: 2 to 9 times faster on JSSP orb01,
+   `learnt_results.md` 12.5) and `MIPGap` = 0. Undecided after `SAFE_CHECK_TIME_LIMIT` (300 s,
+   `utils/parameters.py`) = refused.
+
+The refusal message now says why: no feasible solution left, no solution of that cost left (with
+the bound), or none found in the time limit. Every accepted cut gets a **claim**, stored on the
+individual (`Individual.claim`, in `population.json`) and in its attempt record: `keeps_optima`
+(every stored optimum kept: consistent with `ValidCut`) or `safe` (it needed the re-solve:
+`SafeCut` only). The Lean pipeline should prove the matching claim. Timing on the slowest
+validity instances: `runs/analysis/safe_check_timing.py` (`learnt_results.md` 12.3).
+
+```python
+evaluator = CutEvaluator(create_model, validation, evaluation, solver)
+evaluator(code)              # fitness, as before; may now accept a safe cut
+evaluator.claim_of(code)     # "keeps_optima" or "safe" (None if refused)
+```
+
+### Step 43: Related work and the IMO6 / MCND cases (analysis only, no change to `src/`)
+- `related_work_20261116.md`: EvoCut TMLR, FLARE + FormulationBench, PBLean, CAM-Bench,
+  OptProver; what each does and what we add.
+- **IMO6:** EvoCut's v1-EC1 / v1-EC2, which FLARE proves invalid, are **safe** for every N. The
+  proof is in `runs/analysis/imo6_safe_proof_20261116.md`: a mirrored olympiad construction that
+  keeps both cuts, plus the olympiad lower bound.
+- **MCND:** our transcription of SAGE-MCND is right. The paper's formulation fixes the gross
+  out-flow of O[k] and in-flow of D[k], so a commodity can loop at both ends without crossing a
+  cut. FormulationBench adds "no out-flow from D[k]" as an implicit constraint.
+- **MCND model changed (a difference from EvoCut, to state in the paper):** `models/mcnd.create_model`
+  now conserves the **net** flow (out - in = d[k] at O[k], in - out = d[k] at D[k]). Cycles stay
+  feasible, so "no flow into the origin" remains a cut the LLM can find (safe, not valid; tested).
+  The paper's formulation is kept as `create_model_paper`, for comparison only.
+  - `data/validity/mcnd/validity.pkl` is rebuilt: 15 of its 35 stored optima were loop solutions
+    (`runs/analysis/mcnd_validity_optima_net_vs_paper_20261116.txt`). The old file is
+    `validity_paper_formulation.pkl`.
+  - **Still on the paper's formulation, to redo:** `runs/benchmark/mcnd/tl2000/` (every label)
+    and the two MCND runs of 13-14 Nov. Their validity checks refused flow-type cuts that removed
+    loop optima. Before the next MCND run on the lab, delete the fitness sets in `data/mcnd/` on
+    the machines (they store base results of the old model) and copy the new `data/validity/`.
+
+```bash
+cd src
+PYTHONPATH=. ../.venv/bin/python ../runs/analysis/imo6_flare_cuts.py          # validity, optimum N = 2..8
+PYTHONPATH=. ../.venv/bin/python ../runs/analysis/imo6_flare_cuts_safety.py   # per permutation, construction
+PYTHONPATH=. ../.venv/bin/python ../runs/analysis/mcnd_paper_cut_check.py     # r16.2 r16.3 r16.6
+```
+
 ### Tests
 The `tests/` folder holds one file per module. Every new step adds or updates its tests.
 Run them from the project root:
@@ -1951,7 +2019,7 @@ way scripts do (`from loaders.tsp import LoaderTSP`). Shared fixtures live in
 | [test_prompts.py](tests/test_prompts.py) | YAML files load, expected operators present, every system prompt fills with the real `create_model` source and leaves no placeholder, user templates fill; `Prompts` builds mutation / crossover / retry messages; `parse_reply` reads the format (bold labels, extra text, no backticks, indentation) and refuses bad ones; `initializer.yaml` keys, initializer messages (reference code, ideas list, best fitness), every prompt variant fills without placeholder and keeps the IDEA/CODE format, the problem is described from `problems/<name>.yaml` (name, description, sizes, solution in the fitness text), no template outside `problems/` mentions the TSP, `few_shot` takes its examples from the problem, a placeholder without value and an unknown problem are refused, `fitness.yaml` has one text per `FitnessMode` and every variant shows the text of the chosen mode (and not the other), unknown fitness mode refused, variants override keys (common, initializer) or whole files (operators), unknown variant refused |
 | [test_llm_base.py](tests/test_llm_base.py) | `LLMClient` is abstract, failed calls retried, `LLMError` after the last try, `clean` hook applied |
 | [test_llm_fake.py](tests/test_llm_fake.py) | replies in order, each conversation recorded as sent, no reply left → `LLMError` |
-| [test_genetic.py](tests/test_genetic.py) | `initialize`: evaluated seed first then new cuts, the initializer sees the seed and the growing list of ideas, failed slot → copy of the seed, rejected baseline and second `initialize` raise; generation size kept and elite copied, `crossover_rate` picks the operator, bad format / rejected cut sent back and retried, parent copied when every attempt fails, unreachable LLM gives up at once, best fitness shown to the LLM, tournament, population of 1, same seed → same run, `progress` called before each child (not for the seed or the elites), every attempt recorded (format error, rejected with its reason, accepted with fitness and individual id, conversation and timings), the first generation has its own number of attempts, an initial cut repeating the generation is refused without solving |
+| [test_genetic.py](tests/test_genetic.py) | `initialize`: evaluated seed first then new cuts, the initializer sees the seed and the growing list of ideas, failed slot → copy of the seed, rejected baseline and second `initialize` raise; generation size kept and elite copied, `crossover_rate` picks the operator, bad format / rejected cut sent back and retried, parent copied when every attempt fails, unreachable LLM gives up at once, best fitness shown to the LLM, tournament, population of 1, same seed → same run, `progress` called before each child (not for the seed or the elites), every attempt recorded (format error, rejected with its reason, accepted with fitness and individual id, conversation and timings), the first generation has its own number of attempts, an initial cut repeating the generation is refused without solving, the claim of each accepted cut is stored on the individual and in its record (copies keep it, old files load with none) |
 | [test_llm_openai_compatible.py](tests/test_llm_openai_compatible.py) | against a fake OpenAI-style server: conversation and options sent with the key, answer returned, models listed (Gemini's `models/` names too), wrong key or model retried then `LLMError`, a rate limit waited out (`Retry-After`, capped), a `<think>` block removed, key from the environment or `llm_keys.env` |
 | [test_llm_factory.py](tests/test_llm_factory.py) | the backends, Ollama and API clients built with the provider's URL and key, missing key and unknown backend refused |
 | [test_list_models.py](tests/test_list_models.py) | the script prints a backend's models, usage on an unknown backend |
@@ -1997,8 +2065,8 @@ way scripts do (`from loaders.tsp import LoaderTSP`). Shared fixtures live in
 | [test_run_files.py](tests/test_run_files.py) | the run name of a population file (new and old layout) |
 | [test_log_archive.py](tests/test_log_archive.py) | a log folder becomes one archive with the same content, a resumed run gets `_2`, nothing to pack |
 | [test_status.py](tests/test_status.py) | the status file is created "running", updates keep the other fields, no temporary file left |
-| [test_transforms.py](tests/test_transforms.py) | `with_cut` runs the code with `m, gp, GRB, n, c` and keeps the optimum for a valid cut, code errors raise, `relaxed` drops integrality and keeps names, `fixed` to the optimum is feasible and to a bad point infeasible, rounding, partials compose |
-| [test_evaluator.py](tests/test_evaluator.py) | valid and useful cut gets a fitness, the fitness follows the gap formula, removing an optimal tour → invalid, implied constraint → useless, lower bound above a known solution → invalid, broken code → rejected with its error, validation set without solutions or solved evaluation instance refused, a cut hitting the time limit rejected as too slow, `check` runs only the validity and usefulness checks; gap_work: work ratios pooled with the gap ratios, optimality instances required and solved by the base, a bound above their optimum refused |
+| [test_transforms.py](tests/test_transforms.py) | `with_cut` runs the code with `m, gp, GRB, n, c` and keeps the optimum for a valid cut, code errors raise, `relaxed` drops integrality and keeps names, `fixed` to the optimum is feasible and to a bad point infeasible, rounding, partials compose, `with_stops` stops at a solution of the optimal cost or at a bound above it |
+| [test_evaluator.py](tests/test_evaluator.py) | valid and useful cut gets a fitness, the fitness follows the gap formula, removing an optimal tour (both directions) → invalid, a symmetry-breaking cut that removes the stored tour → accepted with claim `safe` (a valid one → `keeps_optima`), an undecided safe check → refused, implied constraint → useless, lower bound above a known solution → invalid, broken code → rejected with its error, validation set without solutions or solved evaluation instance refused, a cut hitting the time limit rejected as too slow, `check` runs only the validity and usefulness checks; gap_work: work ratios pooled with the gap ratios, optimality instances required and solved by the base, a bound above their optimum refused |
 | [test_main.py](tests/test_main.py) | a small run on tiny sets with `FakeLLM` (seed + initializer, 1 generation, saved after each generation), resuming continues without a new first generation, missing sets reported, `--model_name` required, sets from another CPU or thread count refused, the status file follows the run (finished, generation, best, the run's own Gurobi logs packed into `logs/<run>.tar.gz`; a resumed run adds `_2`), an interrupted run is marked "stopped", run name with the host / the resumed file's name, end-of-run review saved (`<run>.review.json`) and the same review by `review_run.py` on the saved population, everything in `runs/<run>/` with a `summary.md`, resuming from the run folder keeps its name, a review with only generation 0, a run end to end on each other problem, CWLP, JSSP, MCND, IMO6, GISP and corridor (its seed cut, its prompts, an accepted cut, reviewed on its own test set), the review runs on the held-out `test.pkl` (no instance in common with the evaluation set), a run without `test.pkl` fails before any LLM call (and runs without a review); a run on the hard level (its own sets, the LLM told the sizes, `review_run.py` refuses another level); a gap_work run (optimality sets required, work change in the review, `review_run.py` refuses another fitness mode) |
 | [test_solver.py](tests/test_solver.py) | results stored per formulation, a valid cut keeps the optimum, `SET` and `RANDOM` seed modes, every run kept, log file named with the seed, missing `log_dir` error, infeasible model, unbounded model, isolated and in-process give the same optimum, broken formulation → `ERROR` with its message, `TOO_LARGE`, hanging build → `KILLED`, dead child → `CRASHED`, build time not in `runtime`, lambdas refused when isolated, each solve follows its own `verbose`, `keep_solution` stores the tour (both modes) and is off by default, work recorded and reproducible, `work_limit` stops the solve, machine / CPU / threads recorded (also for failed solves), extra Gurobi `params` applied (both modes), trajectory recorded only when asked, in time order, bound rising, incumbent falling to the final objective |
 
@@ -2038,6 +2106,8 @@ is in [TODO.md](TODO.md) → "Priorities".
   `<think>...</think>` block before their answer. Remove it in the client's `clean` hook (the
   reference `extract_json` does the same).
 - [x] Fitness measure: Gurobi work units, reproducible, so elites need no re-evaluation (Step 9)
+- [x] Safe validity check: re-solve with early stops when a cut removes the stored optimum; claim per cut (Step 42)
+- [ ] `check_run_cuts.py` (re-check of past runs) still uses the fixed-optimum check only
 - [x] Elites and fallback copies are new individuals (`Individual.copy`), and
   `set_generation` refuses duplicate ids
 - [x] `GeneticAlgorithm`: tournament selection, elitism, one child per slot, mutation and crossover (Step 7)
@@ -2119,6 +2189,176 @@ What was done when (details in the Progress steps above, results in `learnt_resu
   GISP and wildlife corridor design, the first less-known problems (Steps 39, 40); the night job retries a benchmark that found no
   machine, and launching is allowed at any hour on weekends (Step 29).
 - **14 Nov:** the proof pipeline in Lean 4 (Step 41).
+- **22 Nov:** the replication program in the night plan (Step 47): GA vs no GA, hidden problem
+  and recall with Muse, Sonnet and qwen3-coder; API runs may use machines whose GPU is taken;
+  `max_alive` caps the Claude runs alive at once.
+- **21 Nov:** Claude as a GA backend; searches without the GA (`--search sample | recall`,
+  `--hide_problem`) (Step 46); MCND instance sets rebuilt for the net-flow model.
+- **20 Nov:** `select_cuts.py`, choosing the final cut on held-out instances (Step 44); the
+  counterexample search (Step 45); the night job's benchmark entries can run another script, and
+  an entry whose results are all on disk counts as complete.
+
+### Step 44: Choosing the final cut on held-out instances (`select_cuts.py`)
+The best cut of a run scores about 16 on its 8 evaluation instances and about 13 on the test set,
+the seed cut's level (learnt_results.md 12.14): the GA overfits. `select_cuts.py` measures whether
+choosing among a run's best cuts on a second held-out set fixes that, without any new run:
+- `selection.pkl`: 16 instances, the test sizes, seeds 6000+ (7000+ at the hard level), built by
+  `prepare_instances.py --selection` or by `select_cuts.py` itself when missing (a lock file lets
+  one machine build it while the others wait).
+- For each run: its 5 distinct cuts of highest run fitness and the seed cut, scored on the
+  selection set under the run's fitness seeds and on `test.pkl` under seeds 0-4; saved in
+  `runs/<run>/selection.json`. The table compares the test score of the cut picked by run fitness
+  (what runs do now), by selection score, and the best possible (oracle).
+
+      python select_cuts.py --data_dir ../data/a5000 --population_file ../runs/<run>/population.json ...
+
+If selecting on held-out instances helps, `main.py` will do it at the end of every run.
+
+### Step 45: Counterexample search (`falsify_cut.py`, `proving/falsify.py`)
+Step 1 of the paper plan searches for counterexamples before attempting a proof. The default is
+200 tiny cases per problem. IMO6 has only one input, the grid size, so it checks each of
+`N = 2, 3, 4, 5` once. TSP, CWLP and JSSP samples meet their Lean models' assumptions.
+MCND includes forced flow splits and circulations. GISP varies permanent and removable edges.
+Corridor includes feasible paths, stars and grids under tight and full budgets.
+
+- **safety:** the optimum with the cut must equal the optimum without it, otherwise REFUTED (the
+  base model's optimal point is the counterexample);
+- **validity** (cuts that add no variable): each row the cut adds (and each bound it tightens) is
+  evaluated at up to 200 feasible points of Gurobi's solution pool; when none violates it, a small
+  MIP maximizes its violation over the base model's feasible set. A violated row with the optimum
+  kept is SAFE_NOT_VALID.
+
+      python falsify_cut.py --problem_name tsp --cut_file ../cuts/tsp/paper_sage.py
+      python falsify_cut.py --population_file ../runs/<run>/population.json [--all]
+
+The cut's code runs in this process (stored cuts only; the GA will need the Solver's child process).
+Validation (20 Nov): it refutes the 18 cuts known to be invalid (learnt_results.md 5.12, 5.16,
+5.18) and the control `cuts/tsp/invalid_position_bound.py`, and finds nothing on the 4 proved
+cuts and the 3 textbook cuts.
+
+### Step 46: Claude in the GA, and searches without the GA (`--search sample | recall`)
+**Claude through the subscription** (`--llm_backend claude_code --model_name sonnet`): the
+`claude -p` client of the proof loop (`llm/claude_code.py`, no tool, no session saved) is now a
+GA backend. On a machine where Claude Code is not logged in (the lab), put the token printed by
+`claude setup-token` on a `CLAUDE_CODE_OAUTH_TOKEN=...` line of `llm_keys.env`. A usage limit of
+the subscription stops the run (`UsageLimit`, resumed by the night job at its next ticks); a login
+error stops it too, and is not resumed (otherwise every call fails and the GA fills its
+generations with copies).
+
+**Is the LLM only recalling textbook cuts?** Controls for the GA, with the same LLM, checks and
+fitness (`evolution/sampling.py`, prompts in `prompts/sampling.yaml`):
+- `--search sample --llm_calls N`: N LLM calls in fresh conversations asking for the one cut that
+  makes the solve fastest; no parent, no fitness shown, no list of earlier cuts. A refused answer
+  gets its reason and up to `--max_llm_attempts` tries in its conversation, as in the GA, and a
+  copy of a cut already found is refused. N = the calls of the GA run compared (157 for the Muse
+  TSP run bengali 20261111).
+- `--hide_problem`: the problem is not named. `prompts/anonymous/<problem>.yaml` replaces the
+  name and the story, the model is shown without comments or docstrings, and its `words`
+  (cities, tour, MTZ, ...) are replaced everywhere; a prompt still holding one is refused. Only
+  the TSP has this file.
+- `--search recall --llm_calls N`: fresh conversations asking for the best cut KNOWN in the
+  literature for this problem and formulation, with the ideas already given.
+
+The cuts are stored in batches of `--population_size` as the generations of `population.json`
+(the seed cut first; the last batch completed with copies), so the review, `select_cuts.py` and
+the benchmark work as for a GA run. Run names carry the mode:
+`tsp_muse-spark-1.3-contributor-sample-hidden_<host>_<date>`.
+
+    python main.py --llm_backend muse --model_name muse-spark-1.3-contributor --search sample --llm_calls 157 [--hide_problem]
+    python main.py --llm_backend muse --model_name muse-spark-1.3-contributor --search recall --llm_calls 24
+
+### Step 47: the replication program (22 Nov)
+
+The first comparison (one run each, TSP, review score) showed: Muse with the GA 23.88, Sonnet
+with the GA 24.98, Muse without the GA 15.49 (problem named) and 14.99 (hidden), recall 12.83,
+seed cut 13.15. To make these claims rest on more than one run, `computer_connection/night_plan.json`
+now holds 54 more runs, all on the a5000 machines (one CPU model):
+
+| Problem | LLM | GA | No GA (`--search sample`) | No GA, hidden | Recall (24 calls) |
+|---|---|---|---|---|---|
+| TSP | Muse | 3 | 3 (157 calls) | 1 | 3 |
+| TSP | Sonnet | 3 | 3 (157 calls) | 3 | 3 |
+| TSP | qwen3-coder:30b | 5 (16 Nov) | 5 (232 calls) | 5 | 3 |
+| CWLP, JSSP | Sonnet | 3 | 3 (157 calls) | - | - |
+| CWLP, JSSP | qwen3-coder:30b | 3 | 3 (300 calls) | - | - |
+
+Totals count the runs already made (recorded in `logs/night_state.json`). The no-GA budget equals
+the GA's calls where they are known (Muse 157, qwen TSP 232 = mean of 219, 256, 221), otherwise
+the top of the range (qwen 300), which favours the no-GA arm. Hidden problem: TSP only (the only
+`prompts/anonymous/` file).
+
+Two changes to `fleet.py plan_night`:
+
+- **API runs** (Muse, Claude) no longer need a free GPU: they may go to a machine whose GPU another
+  user takes, and go there first, leaving the free GPUs to the Ollama runs. Resumes follow the
+  same rule (an Ollama run is not resumed on a busy GPU).
+- **`max_alive`** in the plan, e.g. `{"claude_code": 2}` (2 at first; 6 from 22 Nov; back to 2 on 25 Nov, the user's rule): at most that many runs of a backend alive
+  at once, resumes included. The Claude subscription is shared with the user's own sessions.
+
+Tests: `computer_connection/test_fleet.py` (73 pass).
+
+HTTP 402 or a body naming a spend limit (Muse: "monthly_spend_limit_reached", 22 Nov) now raises
+`QuotaExhausted` in `src/llm/openai_compatible.py` (`spend_limit`): the run stops instead of
+filling its generations with copies of the seed cut. The Muse entries are paused at 1 run
+("paused" in the plan) until the limit is raised. The user raised it the same day: they are back to 3.
+
+### Step 48: fitness graphs (`graphs/`, 23 Nov)
+`graphs/make_graphs.py` reads the GA runs in `runs/` and draws three overviews (one panel per
+problem, one colour per LLM): `overview_mean_fitness.png` (average fitness of the population,
+mean over runs, band from the lowest to the highest run), `overview_best_fitness.png` (fitness of
+the population's best cut, mean over runs) and `overview_best_runs.png` (for each LLM, the run
+with the best final result, its best cut and population average per generation, and its
+winner's test score). For GA against no GA (`--search sample | recall`, same settings
+otherwise): `ga_vs_no_ga_calls.png`, the best training fitness found after X LLM calls (mean over
+finished runs, read from the call records in `llm/`, rejected answers and retries included), and
+`test_results.tex`, the test scores of every finished run's winner (the seed cut when nothing
+beat it) as two booktabs tables for the paper (GA against the controls; the GA per problem and
+LLM; `\usepackage{booktabs,multirow}`), compiled into `test_results.pdf` with `pdflatex`. It keeps comparable runs only
+(8 x 20, fitness `gap` on seeds 42 43 44, work limit 10, default instances and prompts, not the
+spend-limit runs of 22 Nov) and lists them in `graphs/runs.csv`. Fetch first, then:
+
+    python3 computer_connection/fleet.py fetch
+    cd graphs && ../.venv/bin/python make_graphs.py
+
+matplotlib was added to `.venv` for it (`uv pip install matplotlib`).
+
+### Step 49: the exact Claude model in each run, statistics for the tables, runs approved on 23 Nov
+- **The exact model.** `--model_name sonnet` or `opus` is an alias that moves to each new model.
+  `ClaudeCodeClient` now reads the `modelUsage` of every `claude -p` answer: each call's line in
+  `run.log` reads `claude sonnet (claude-sonnet-5-5, effort default): ...`, and `status.json`
+  gets `llm_model_id` and `llm_effort` after each generation (`LLMClient.identity()`, empty for the
+  other backends). "default" means no `--effort` was passed: Claude Code's own default for that
+  model; the answer does not report it. Runs before 23 Nov: Sonnet runs were `claude-sonnet-5-5`
+  (checked on the lab with Claude Code 2.1.330).
+- **Statistics** (`graphs/make_graphs.py`, `tests/test_graph_stats.py`): `test_results.tex` has a
+  third table, GA minus each control for the same LLM: the difference of mean test scores, a 95%
+  percentile bootstrap interval (the runs of each arm resampled independently, 10,000 resamples,
+  fixed seed) and the two-sided p-value of Welch's t-test (unequal variances; "--" when an arm has
+  fewer than 2 runs or no spread). Tested against `scipy.stats.ttest_ind(equal_var=False)`,
+  `scipy.stats.bootstrap` and the Wikipedia example of Welch's test (t = -2.46, df = 25,
+  p = 0.021). scipy was added to `.venv` (Mac only, like matplotlib: the tests skip without them).
+- **Night plan** (`paper_plan_20261123.md`, approved by the user): R1, one Opus 5.5 GA run on the
+  TSP (first entry, so it starts first); R2, the 4 Sonnet TSP arms from 3 to 5 runs; R3, GA against
+  no GA on MCND (a5000), GISP and IMO6 (rtx3090, where their sets are), with Sonnet (2 + 2), qwen
+  (up to 2 GA, 2 no GA) and Muse (1 no GA); R4, recall (24 calls) with Sonnet, Muse and qwen on
+  CWLP, JSSP, MCND, GISP and IMO6. 57 new runs (35 Sonnet, 1 Opus, 13 qwen, 8 Muse) plus 7 to
+  resume. No-GA budgets in the entries' comment.
+
+### Step 50: every lab machine in the fleet (23 Nov)
+The user gave the full list of rooms 30-36. Since most runs now ask an API LLM (Muse, Claude),
+a machine's GPU matters less than its CPU and its Gurobi license. `computer_connection/machines.txt`
+now lists the 168 machines that answer (a4000 19, a5000 25, rtx2000ada 25, ada4000 74,
+rtx3090 25), with notes (no license, full `/Data`). The new group `rtx2000ada` (room 32) has the
+CPU of the rtx3090 group, so it uses its instance sets (a link on the lab); the GISP/IMO6 API
+entries of the night plan may run there. 28 machines have their own license; the others use the
+WLS one (2 at once) until new keys are added (`computer_connection/README.md`).
+
+**Same day: licenses, and runs without a GPU in the daytime.** 28 more keys activated: every a5000
+machine and 24 of 25 rtx3090 have their own license now (rtx2000ada 6). The user allowed runs that
+use no GPU at any hour (`GPU_FREE_ALL_DAY` in fleet.py): an API LLM run, a set build or a cut
+selection may start between 08:00 and 18:00 on weekdays, and the morning job leaves them; the
+Ollama runs, prompt benches and the 2000 s benchmarks (wall-clock time) keep the night. Tests in
+`computer_connection/test_fleet.py`.
 
 ## Code conventions
 - Type hints everywhere: parameters, return types (`-> None` included), class attributes

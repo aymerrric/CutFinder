@@ -99,3 +99,41 @@ def test_the_imo6_paper_cut_lifts_the_lp_to_n() -> None:
         relaxed.optimize()
         values.append(relaxed.ObjVal)
     assert values[0] < 1.5 and values[1] >= N - 1e-6
+
+
+def textbook_cut(problem: str) -> str:
+    with open(os.path.join(ROOT, "cuts", problem, "textbook.py")) as f:
+        return f.read()
+
+
+def small_gisp() -> Instance:
+    """A random graph of 14 nodes, half of its edges permanent (triangles: clique rows)."""
+    import random
+    rng = random.Random(3)
+    edges = [(i, j) for i in range(14) for j in range(i + 1, 14) if rng.random() < 0.45]
+    permanent = [e for e in edges if rng.random() < 0.5]
+    removable = [e for e in edges if e not in permanent]
+    return {"name": "gisp_small", "args": {"nodes": list(range(14)), "permanent": permanent,
+                                           "removable": removable, "weight": 100, "cost": 1}}
+
+
+@pytest.mark.parametrize("problem,make,optimum", [
+    ("tsp", small_tsp, 6859.0),
+    ("cwlp", small_cwlp, None),
+    ("jssp", small_jssp, None),
+    ("mcnd", small_mcnd, 74079.0),
+    ("gisp", small_gisp, None),
+])
+def test_textbook_cut_keeps_the_optimum(problem: str, make, optimum, tmp_path) -> None:
+    """cuts/<problem>/textbook.py (the literature's cuts, the benchmark's human reference)."""
+    spec = PROBLEMS[problem]
+    solver = Solver(time_limit=120, threads=2, seed=0, seed_mode=SeedMode.SET, log_dir=str(tmp_path))
+    solver.add_formulation("base", spec.base)
+    solver.add_formulation("textbook", functools.partial(with_cut, base=spec.base, code=textbook_cut(problem)))
+    instance: Instance = make()
+    base: SolveResult = solver.solve(instance, "base")
+    cut: SolveResult = solver.solve(instance, "textbook")
+    assert base.status == "OPTIMAL" and cut.status == "OPTIMAL"
+    assert cut.obj_val == pytest.approx(base.obj_val)
+    if optimum is not None:
+        assert base.obj_val == pytest.approx(optimum)

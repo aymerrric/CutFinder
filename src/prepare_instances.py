@@ -9,6 +9,7 @@ Existing files are loaded instead of rebuilt (so running it again only builds a 
 delete data/<problem>/<set>.pkl to rebuild it. --data_dir: another folder (e.g. one per CPU type:
 Gurobi work, so the evaluation set, depends on the CPU). --instance_level hard: the evaluation and
 test sets of larger instances (Problem.hard_sizes), in evaluation_hard.pkl and test_hard.pkl.
+--selection: also the selection set (selection.pkl, test sizes, other seeds), for select_cuts.py.
 --optimality: also the optimality sets of the gap_work fitness (optimality.pkl, optimality_test.pkl):
 instances the base model proves optimal with a work in parameters.OPTIMALITY_WORK.
 """
@@ -39,6 +40,9 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--n_validation", type=int, default=parameters.N_VALIDATION)
     parser.add_argument("--n_evaluation", type=int, default=parameters.N_EVALUATION)
     parser.add_argument("--n_test", type=int, default=parameters.N_TEST)
+    parser.add_argument("--selection", action="store_true",
+                        help="also build the selection set (selection.pkl, for select_cuts.py)")
+    parser.add_argument("--n_selection", type=int, default=parameters.N_SELECTION)
     parser.add_argument("--min_base_gap", type=float, default=parameters.MIN_BASE_GAP)
     parser.add_argument("--validation_time_limit", type=float, default=parameters.VALIDATION_TIME_LIMIT)
     parser.add_argument("--time_limit", type=float, default=parameters.TIME_LIMIT)
@@ -121,6 +125,15 @@ if __name__ == "__main__":  # required: the Solver's child processes import this
         evaluation_solver, require_optimal=False, accept=has_gap(args.min_base_gap), **spec.sizes,
     )
 
+    # selection: a second held-out set (test sizes, other seeds), to choose a run's final cut
+    selection: List[Instance] = []
+    if args.selection:
+        spec = instance_set(problem, "selection", args.instance_level)
+        selection = build_set(
+            loader, spec.filename, args.n_selection, spec.seed,
+            evaluation_solver, require_optimal=False, accept=has_gap(args.min_base_gap), **spec.sizes,
+        )
+
     optimality: List[List[Instance]] = []
     if args.optimality:
         if problem.optimality_sizes is None:
@@ -137,5 +150,7 @@ if __name__ == "__main__":  # required: the Solver's child processes import this
     print(summary("validation", validation))
     print(summary(f"evaluation ({args.instance_level} level)", evaluation))
     print(summary(f"test ({args.instance_level} level)", test))
+    if selection:
+        print(summary(f"selection ({args.instance_level} level)", selection))
     for title, instances in zip(("optimality", "optimality test"), optimality):
         print(summary(title, instances))

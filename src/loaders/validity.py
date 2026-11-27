@@ -184,8 +184,8 @@ def jsplib_instances(raw_dir: str, names: Optional[List[str]] = None) -> List[In
 MCND_PUBLIC: List[str] = [f"r{g:02d}.{v}" for g in range(1, 10) for v in (1, 5, 9)]
 
 
-def _mcnd(name: str, note: str, arcs: Dict[Tuple[int, int], Tuple[int, int, int]],
-          commodities: List[Tuple[int, int, int]]) -> Instance:
+def mcnd_instance(name: str, note: str, arcs: Dict[Tuple[int, int], Tuple[int, int, int]],
+                  commodities: List[Tuple[int, int, int]]) -> Instance:
     """An instance written by hand: arcs (i, j) -> (unit cost, capacity, fixed cost), commodities
     (origin, destination, demand)."""
     nodes: List[int] = sorted({i for arc in arcs for i in arc})
@@ -216,15 +216,15 @@ def mcnd_instances(raw_dir: str, seed: int = VALIDITY_SEED) -> List[Instance]:
                                              tightness=tight, fixed_level=fixed)[0]
             name: str = f"random_{'loose' if fixed == 1 else 'tight'}_{n}n{arcs}a{commodities}k"
             out.append({"name": name, "note": f"random, {note}", "args": inst["args"]})
-    out.append(_mcnd("split_demand", "a demand of 10 on two parallel paths of capacity 6 each: the optimum "
+    out.append(mcnd_instance("split_demand", "a demand of 10 on two parallel paths of capacity 6 each: the optimum "
                      "splits it", {(1, 2): (1, 6, 10), (2, 4): (1, 6, 10), (1, 3): (1, 6, 10), (3, 4): (1, 6, 10)},
                      [(1, 4, 10)]))
     cycle: Dict[Tuple[int, int], Tuple[int, int, int]] = {(i, i % 6 + 1): (10 + i, 100, 50 * i) for i in range(1, 7)}
-    out.append(_mcnd("cycle_only", "a single cycle of 6 arcs: every arc on a used path must open",
+    out.append(mcnd_instance("cycle_only", "a single cycle of 6 arcs: every arc on a used path must open",
                      cycle, [(1, 4, 20), (3, 6, 15), (5, 2, 30), (6, 1, 10)]))
     expensive: Dict[Tuple[int, int], Tuple[int, int, int]] = {
         (i, j): (5 + (3 * i + j) % 7, 200, 1000) for i in range(1, 7) for j in range(1, 7) if i != j}
-    out.append(_mcnd("expensive_arcs", "expensive arcs, roomy capacities: few arcs open, shared by the commodities",
+    out.append(mcnd_instance("expensive_arcs", "expensive arcs, roomy capacities: few arcs open, shared by the commodities",
                      expensive, [(1, 6, 30), (2, 5, 20), (3, 4, 25), (6, 1, 15)]))
     for inst in commalab_r_instances(raw_dir, MCND_PUBLIC):
         inst["note"] = f"public instance {inst['name']} (CommaLab R, outside the paper's test set r10-r18)"

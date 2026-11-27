@@ -1,0 +1,28 @@
+# main.py --hide_problem: what replaces the problem's name and story (prompts/problems/tsp.yaml)
+# when the LLM must not be told which problem it is. The model is shown without its docstrings
+# and comments, and every word of `words` (whole words, any case, longest first) is replaced in
+# everything the LLM reads: model code, instance sizes, scoring text, retry messages. A prompt that
+# still contains one of these words is refused (evolution/prompts.py).
+
+problem: a minimization problem
+
+solution: solution
+
+description: |-
+  - The data and the MILP model are given below: x is a binary variable for each ordered pair
+    (i, j) of nodes, u an integer variable for each node, c the cost data of the objective.
+
+words:
+  Traveling Salesman Problem: problem
+  Travelling Salesman Problem: problem
+  salesman: agent
+  TSP: problem
+  MTZ: order
+  tours: solutions
+  tour: solution
+  subtours: cycles
+  subtour: cycle
+  cities: nodes
+  city: node
+  depot: first node
+  Hamiltonian: spanning

@@ -2,11 +2,13 @@
 from typing import Any, Dict, List, Optional
 
 from llm.base import LLMClient
+from llm.claude_code import ClaudeCodeClient, claude
 from llm.ollama import OllamaClient
 from llm.openai_compatible import OpenAICompatibleClient, api_key
 from utils import parameters
 
-BACKENDS: List[str] = ["ollama", *parameters.API_PROVIDERS]  # the choices of --llm_backend
+CLAUDE_CODE: str = "claude_code"  # Claude through `claude -p`: the user's subscription
+BACKENDS: List[str] = ["ollama", *parameters.API_PROVIDERS, CLAUDE_CODE]  # the choices of --llm_backend
 
 
 def make_llm(
@@ -14,7 +16,8 @@ def make_llm(
     ollama_host: str = parameters.OLLAMA_HOST, check: bool = True,
 ) -> LLMClient:
     """
-    backend: "ollama" or a provider of parameters.API_PROVIDERS ("groq", "gemini", "openrouter").
+    backend: "ollama", a provider of parameters.API_PROVIDERS ("groq", "gemini", "openrouter", ...)
+             or "claude_code" (model: an alias such as "sonnet" or "opus"; no temperature).
     check: refuse a model the server or provider does not offer (one cheap request), so that a
            typo fails now and not at the first child.
     """
@@ -26,6 +29,12 @@ def make_llm(
         base_url, variable = parameters.API_PROVIDERS[backend]
         llm = OpenAICompatibleClient(model, base_url, api_key(variable), options=options)
         where = backend
+    elif backend == CLAUDE_CODE:
+        if temperature is not None:
+            raise ValueError("claude -p has no temperature option: leave --temperature out")
+        if check and claude() is None:
+            raise ValueError("the claude command is not installed (https://claude.ai/install.sh)")
+        return ClaudeCodeClient(model)
     else:
         raise ValueError(f"unknown LLM backend {backend!r} ({', '.join(BACKENDS)})")
     if check and model not in llm.available_models():

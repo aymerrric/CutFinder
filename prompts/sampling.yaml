@@ -1,0 +1,28 @@
+# Search without a genetic algorithm (main.py --search sample | recall, evolution/sampling.py):
+# every conversation starts from scratch, with no parent cut, no fitness and no list of earlier
+# cuts (sample) or only the list of the ideas already proposed (recall). The system prompt is the
+# one of common.yaml (problem, scoring, validity, code rules, reply format, model) with {role}
+# replaced by `role` below and {task} by the mode's task. A rejected answer gets the usual retry
+# message (common.yaml retry_user), as in the GA.
+
+role: |-
+  You are a MILP optimization expert. You write cutting planes (extra constraints, called cuts)
+  for a MILP model of {problem}, given at the end.
+
+sample_task: |-
+  Task: propose the ONE cut that you expect to make Gurobi solve this model the fastest, that is
+  to reach the smallest optimality gap within the solver budget described below.
+
+sample_user: |-
+  Propose your best cut.
+
+recall_task: |-
+  Task: recall the best cuts KNOWN in the literature (textbooks, survey papers, the standard
+  valid inequalities used by solvers and practitioners) for this problem and this formulation.
+    - Give ONE known cut per answer: the one you remember as the most effective that is not
+      in the list of cuts already given.
+    - Write it for THIS model, with its variables and its constraints as written.
+
+recall_user: |-
+  Known cuts already given (give another one):
+  {ideas}

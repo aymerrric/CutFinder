@@ -7,7 +7,7 @@ from gurobipy import GRB
 
 from loaders.base import Instance
 from loaders.mcnd import LoaderMCND
-from models.mcnd import BASELINE_CODE, create_model
+from models.mcnd import BASELINE_CODE, create_model, create_model_paper
 from models.transforms import with_cut
 
 Arc = Tuple[int, int]
@@ -101,3 +101,57 @@ def test_the_seed_cut_tightens_the_lp_of_a_validation_size_instance() -> None:
     inst: Instance = LoaderMCND(data_dir="/tmp").generate(1, seed=1, **PROBLEMS["mcnd"].validation_sizes)[0]
     base: float = solve(create_model(**inst["args"]).relax())
     assert solve(with_cut(create_model, BASELINE_CODE, **inst["args"]).relax()) > base + 1e-6
+
+
+def loops() -> Dict[str, object]:
+    """One commodity 1 -> 4 on an expensive path 1 -> 2 -> 3 -> 4, with cheap loops 1 -> 5 -> 1
+    and 4 -> 6 -> 4 at its two ends."""
+    A: List[Arc] = [(1, 2), (2, 3), (3, 4), (1, 5), (5, 1), (4, 6), (6, 4)]
+    c: Dict[Arc, float] = {a: (100.0 if a in [(1, 2), (2, 3), (3, 4)] else 1.0) for a in A}
+    return dict(N=list(range(1, 7)), A=A, K=[1], c=c, f={a: 1.0 for a in A}, u={a: 100.0 for a in A},
+                d={1: 10.0}, O={1: 1}, D={1: 4})
+
+
+def test_the_net_flow_routes_the_commodity_and_the_paper_model_loops_instead() -> None:
+    """The paper's model only fixes the gross flow out of O and into D: the two loops satisfy it
+    (4 arcs x 10 units x 1 + 4 openings = 44) without any flow 1 -> 4. The net flow forces the path."""
+    args = loops()
+    assert solve(create_model(**args)) == pytest.approx(3 * 100 * 10 + 3)
+    assert solve(create_model(**args)) == pytest.approx(brute_force(**args))
+    paper: gp.Model = create_model_paper(**args)
+    assert solve(paper) == pytest.approx(44)
+    assert paper._x[1, 2, 1].X == pytest.approx(0) and paper._x[5, 1, 1].X == pytest.approx(10)
+
+
+def test_the_flow_rows_at_the_origin_and_destination() -> None:
+    args = loops()
+    for build, into_origin, out_of_destination in [(create_model, -1.0, -1.0), (create_model_paper, 0.0, 0.0)]:
+        m: gp.Model = build(**args)
+        origin, destination = m.getConstrByName("flow[1,1]"), m.getConstrByName("flow[4,1]")
+        assert m.getCoeff(origin, m._x[1, 5, 1]) == 1.0 and m.getCoeff(origin, m._x[5, 1, 1]) == into_origin
+        assert m.getCoeff(destination, m._x[3, 4, 1]) == 1.0
+        assert m.getCoeff(destination, m._x[4, 6, 1]) == out_of_destination
+        assert origin.RHS == destination.RHS == 10.0
+
+
+@pytest.mark.parametrize("seed", [0, 1, 2])
+def test_the_paper_model_is_a_relaxation(seed: int) -> None:
+    inst: Instance = tiny(seed)
+    assert solve(create_model_paper(**inst["args"])) <= solve(create_model(**inst["args"])) + 1e-6
+
+
+def test_no_flow_into_the_origin_is_safe_but_not_valid() -> None:
+    """With the net flow a commodity may still pass again through its origin (a costly cycle):
+    forbidding it removes feasible points but never the optimum (unit costs are positive)."""
+    args = loops()
+    no_return: gp.Model = create_model(**args)
+    no_return.addConstr(gp.quicksum(no_return._x[i, j, 1] for (i, j) in args["A"] if j == 1) == 0)
+    assert solve(no_return) == pytest.approx(solve(create_model(**args)))
+    detour: gp.Model = create_model(**args)  # route the path plus one loop 1 -> 5 -> 1
+    detour.addConstr(detour._x[5, 1, 1] >= 1)
+    assert solve(detour) > solve(create_model(**args))  # a feasible point the cut removes
+    for seed in [0, 1, 2]:
+        inst: Instance = tiny(seed)
+        m: gp.Model = create_model(**inst["args"])
+        m.addConstrs(gp.quicksum(m._x[i, j, k] for (i, j) in m._A if j == m._O[k]) == 0 for k in m._K)
+        assert solve(m) == pytest.approx(brute_force(**inst["args"]))

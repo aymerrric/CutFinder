@@ -14,7 +14,7 @@ description: |-
     instance is feasible); the other capacities are a few mean demands or less. Opening costs are
     large compared with unit costs. Nodes and commodities are numbered from 1.
   - The model is the arc-based formulation: x[i, j, k] >= 0 = flow of commodity k on arc (i, j),
-    y[i, j] = 1 if arc (i, j) is open. For each commodity: the flow leaving O[k] is d[k], the flow
-    entering D[k] is d[k], every other node is balanced. Capacity: the total flow on (i, j) is at
+    y[i, j] = 1 if arc (i, j) is open. For each commodity, on the net flow (out - in): d[k] at
+    O[k], -d[k] at D[k], 0 at every other node. Capacity: the total flow on (i, j) is at
     most u[i, j] * y[i, j]. The data is also on the model: m._N, m._A, m._K, m._c, m._f, m._u,
     m._d, m._O, m._D.

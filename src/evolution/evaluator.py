@@ -8,14 +8,23 @@ from evolution.genetic import CutRejected
 from evolution.review import SeedScore, score, work_ratios
 from loaders.base import Instance
 from loaders.sets import BASE, BASE_LP
-from models.transforms import cut_violations, fixed, read_violations, relaxed, with_cut
-from solvers.solver import CRASHED, ERROR, KILLED, TOO_LARGE, Formulation, SolveResult, Solver
+from models.transforms import cut_violations, fixed, read_violations, relaxed, with_cut, with_stops
+from solvers.solver import CRASHED, ERROR, KILLED, TOO_LARGE, Formulation, SeedMode, SolveResult, Solver
+from utils import parameters
 
 FAILED: List[str] = [ERROR, TOO_LARGE, KILLED, CRASHED]  # the solve did not reach the end
 NO_SOLUTION: List[str] = ["INFEASIBLE", "INF_OR_UNBD"]
 TIME_LIMIT: str = "TIME_LIMIT"  # stopped by the time limit before the work limit
+BASE_RETRIES: int = 2  # new solves of a base model stopped by the time limit (_solve_base)
+CUTOFF: str = "CUTOFF"  # Gurobi proved no solution is better than the Cutoff parameter
 BASE_SEED: str = "base_seed"  # formulation of the base model solved under an extra scoring seed
 BASE_LP_EVAL: str = "base_lp_eval"  # formulation of the base model's LP relaxation (LP mode)
+# What the validity check showed about an accepted cut (CutEvaluator.claims), i.e. which claim the
+# Lean pipeline should try to prove (lean/EvoCut/Common.lean):
+KEEPS_OPTIMA: str = "keeps_optima"  # every stored optimum satisfies it: consistent with ValidCut
+# it removes a stored optimum, but each such instance, re-solved with the cut, keeps a solution of
+# the optimal cost: consistent with SafeCut only (e.g. symmetry breaking)
+SAFE: str = "safe"
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -73,9 +82,15 @@ class CutEvaluator:
     (CutVerifier.verify_score_cut and cal_fitness), with a work limit instead of a time limit:
 
     1. validity: on every validation instance and every validity instance (prepare_validity.py:
-       small random, TIGHT and public instances), the model with the cut, with its variables
-       fixed to the base model's optimal solution, must stay feasible (the cut keeps the optimal
-       solution). In GAP mode, also: the LP relaxation with the cut of every (large) evaluation
+       small random, TIGHT and public instances), the cut must keep an optimal solution:
+       a. fast first pass: the model with the cut, with its variables fixed to the base model's
+          stored optimal solution, must stay feasible (the cut keeps THAT optimum);
+       b. if it does not, the instance is re-solved with the cut (_check_safe), stopped as soon
+          as a solution of the optimal cost is found (the cut is safe there: it removed one
+          optimum but kept another, like a symmetry-breaking cut) or a bound above that cost is
+          proved (invalid). Undecided after SAFE_CHECK_TIME_LIMIT = refused. EvoCut's own check
+          stops at step a, which refuses every safe cut that is not valid (learnt_results.md 12.3).
+       The accepted cut's claim (KEEPS_OPTIMA or SAFE) is kept in `claims`. In GAP mode, also: the LP relaxation with the cut of every (large) evaluation
        instance must stay at or below a known solution's cost. Refusals for invalidity raise
        CutRejected(invalid=True): the LLM then gets the invalid-cut retry message;
     2. usefulness: on at least one validation instance, the LP relaxation with the cut, with
@@ -169,6 +184,14 @@ class CutEvaluator:
         self.diagnose_solver: Solver = Solver(
             time_limit=DIAGNOSIS_TIME_LIMIT, threads=solver.threads, log_dir=solver.log_dir,
             isolated=solver.isolated, build_timeout=solver.build_timeout, keep_solution=True)
+        # re-solves an instance with the cut when the cut removes its stored optimum (_check_safe):
+        # no work limit, the time limit as a safety net, the checks' seed (reproducible)
+        self.safe_solver: Solver = Solver(
+            time_limit=parameters.SAFE_CHECK_TIME_LIMIT, seed=solver.seed, seed_mode=SeedMode.SET,
+            threads=solver.threads, log_dir=solver.log_dir, isolated=solver.isolated,
+            build_timeout=solver.build_timeout)
+        # code of every accepted cut -> its claim (KEEPS_OPTIMA or SAFE), read by the GA (claim_of)
+        self.claims: Dict[str, str] = {}
         self.evaluation: List[Instance] = evaluation
         self.optimality: List[Instance] = optimality if mode is FitnessMode.GAP_WORK and optimality else []
         self.solver: Solver = solver
@@ -202,40 +225,82 @@ class CutEvaluator:
     def evaluate(self, code: str) -> float:
         """Check the cut (validity, usefulness), then score it according to `mode`."""
         tag, build = self._new_cut(code)
-        self._check_validity(tag, build)
+        claim: str = self._check_validity(tag, build)
         self._check_usefulness(tag, build)
         if self.mode.solves_mip:
             self._check_lp_bound(tag, build)  # LP mode makes the same check while scoring
-            return self._score_gap(tag, build)
+            fitness: float = self._score_gap(tag, build)
         elif self.mode is FitnessMode.LP:
-            return self._score_lp(tag, build)
-        raise ValueError(f"unknown fitness mode {self.mode}")
+            fitness = self._score_lp(tag, build)
+        else:
+            raise ValueError(f"unknown fitness mode {self.mode}")
+        self.claims[code] = claim
+        return fitness
+
+    def claim_of(self, code: str) -> Optional[str]:
+        """The claim of an accepted cut (KEEPS_OPTIMA or SAFE), None if `code` was not accepted."""
+        return self.claims.get(code)
 
     def check(self, code: str) -> None:
         """Only the cheap checks (validity, usefulness: small instances, ~0.4 s): raises
         CutRejected or returns. Used by prompt_bench.py to compare prompts without scoring."""
         tag, build = self._new_cut(code)
-        self._check_validity(tag, build)
+        self.claims[code] = self._check_validity(tag, build)
         self._check_usefulness(tag, build)
 
     def _new_cut(self, code: str) -> Tuple[str, Formulation]:
         self.n_evaluated += 1
         return f"cut{self.n_evaluated}", functools.partial(with_cut, base=self.base, code=code)
 
-    def _check_validity(self, tag: str, build: Formulation) -> None:
-        """Every optimal solution of the validation and validity instances must stay feasible."""
+    def _check_validity(self, tag: str, build: Formulation) -> str:
+        """Every validation and validity instance must keep an optimal solution with the cut: its
+        stored one (fast), else another one of the same cost (_check_safe). Returns the claim:
+        KEEPS_OPTIMA if every stored optimum is kept, SAFE if one needed _check_safe."""
+        claim: str = KEEPS_OPTIMA
         for inst in self.validation + self.validity:
             result: SolveResult = self._solve(
                 inst, f"{tag}_valid", functools.partial(fixed, build=build, solution=inst[BASE].solution)
             )
             if result.status in NO_SOLUTION:
-                note: str = f" ({inst['note']})" if inst.get("note") else ""
-                details: List[str] = [part for part in (self._diagnose(tag, inst, build), describe_data(inst)) if part]
-                raise CutRejected(
-                    f"invalid cut: it removes the optimal solution (cost {inst[BASE].obj_val:g}) of instance "
-                    f"{inst['name']}{note}." + "".join("\n" + part for part in details), invalid=True)
+                self._check_safe(tag, inst, build)  # raises CutRejected if no optimum is left
+                claim = SAFE
+                continue
             if result.status != "OPTIMAL":
                 raise CutRejected(f"could not check validity on {inst['name']}: {result.status}")
+        return claim
+
+    def _check_safe(self, tag: str, inst: Instance, build: Formulation) -> None:
+        """The cut removes the stored optimum of `inst` (cost z*): re-solve `inst` with the cut,
+        stopped at the first solution of cost <= z* (safe here: returns) or at a bound above z*
+        (no optimal solution left: invalid). Infeasible = invalid; undecided at the time limit =
+        refused as well (we cannot show an optimum is left)."""
+        optimum: float = inst[BASE].obj_val
+        threshold: float = optimum + 1e-6 * max(1.0, abs(optimum))
+        name: str = f"{tag}_safe"
+        self.safe_solver.add_formulation(
+            name, functools.partial(with_stops, build=build, obj_stop=threshold, bound_stop=threshold))
+        result: SolveResult = self.safe_solver.solve(inst, name)
+        if result.obj_val is not None and result.obj_val <= threshold:
+            logger.info(f"{tag}: removes the stored optimum of {inst['name']} but keeps another one of the same "
+                        f"cost {result.obj_val:g} (safe, {result.runtime or 0:.2f} s)")
+            return
+        if result.status in FAILED:
+            raise CutRejected(f"could not check validity on {inst['name']}: {result.status} {result.error or ''}")
+        if result.status in NO_SOLUTION:
+            why: str = "and with your cut the instance has no feasible solution left"
+        elif result.status == CUTOFF:  # with_stops' Cutoff: no solution of cost <= threshold exists
+            why = "and no other solution of that cost is left: with your cut every solution costs more"
+        elif result.obj_bound is not None and result.obj_bound >= threshold:
+            why = (f"and no other solution of that cost is left: with your cut no solution costs less than "
+                   f"{result.obj_bound:g}")
+        else:
+            why = (f"and no other solution of that cost was found in {self.safe_solver.time_limit:g} s of "
+                   "solving with your cut")
+        note: str = f" ({inst['note']})" if inst.get("note") else ""
+        details: List[str] = [part for part in (self._diagnose(tag, inst, build), describe_data(inst)) if part]
+        raise CutRejected(
+            f"invalid cut: it removes the optimal solution (cost {optimum:g}) of instance {inst['name']}{note}, "
+            f"{why}." + "".join("\n" + part for part in details), invalid=True)
 
     def _diagnose(self, tag: str, inst: Instance, build: Formulation) -> str:
         """Which of the cut's constraints the optimal solution of `inst` violates, and by how much
@@ -294,13 +359,28 @@ class CutEvaluator:
         logger.info(f"solving the base model under the scoring seed {solver.seed}"
                     + (" (optimality instances)" if optimality else ""))
         solver.add_formulation(BASE_SEED, self.base)
-        results: List[SolveResult] = [solver.solve(inst, BASE_SEED) for inst in instances]
+        results: List[SolveResult] = [self._solve_base(solver, inst) for inst in instances]
         for inst, result in zip(instances, results):
             if result.status in FAILED or result.status == TIME_LIMIT:
                 raise RuntimeError(f"base model on {inst['name']} under seed {solver.seed}: {result.status}")
         if not optimality and not any(r.mip_gap is not None and r.mip_gap > 0 for r in results):
             raise ValueError(f"the base model solves every evaluation instance under seed {solver.seed}")
         return results
+
+    @staticmethod
+    def _solve_base(solver: Solver, inst: Instance) -> SolveResult:
+        """The base model on `inst`, solved again (up to BASE_RETRIES times) when it stops at the
+        time limit before the work limit or the solve fails: a machine loaded by another user for
+        a minute must not end the run (17 Nov, dindon: 8.2 work units in 60 s, against 10 in
+        22-28 s for the same solve two hours later)."""
+        result: SolveResult = solver.solve(inst, BASE_SEED)
+        for attempt in range(BASE_RETRIES):
+            if result.status not in FAILED and result.status != TIME_LIMIT:
+                break
+            logger.warning(f"base model on {inst['name']} under seed {solver.seed}: {result.status}, "
+                           f"solved again ({attempt + 1}/{BASE_RETRIES})")
+            result = solver.solve(inst, BASE_SEED)
+        return result
 
     def _base_lp(self) -> Dict[str, float]:
         """LP value of the base model on each evaluation instance (8 LP solves, a few seconds)."""

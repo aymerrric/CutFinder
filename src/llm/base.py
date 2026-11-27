@@ -21,6 +21,12 @@ class QuotaExhausted(Exception):
     it failed, after its last saved generation, and the night plan resumes it the next night)."""
 
 
+class UsageLimit(QuotaExhausted):
+    """A usage limit that resets within hours (the Claude subscription's 5-hour window): the run
+    stops like on a quota, but its error names this class, not QuotaExhausted, so the night job
+    resumes it at its next ticks (fleet.py NOT_RESUMED_ERRORS)."""
+
+
 class LLMClient(ABC):
     """
     Sends a conversation to an LLM and returns its answer as text. Nothing else: it knows
@@ -61,6 +67,11 @@ class LLMClient(ABC):
     @abstractmethod
     def _send(self, messages: List[Message]) -> str:
         """One call to the backend: return the raw text of the answer, or raise."""
+
+    def identity(self) -> Dict[str, Optional[str]]:
+        """What status.json records about the LLM beyond the --model_name given (empty here; Claude:
+        the exact model id that answered and the effort, since "sonnet" is only an alias)."""
+        return {}
 
     def clean(self, text: str) -> str:
         """Hook for model-specific quirks in the raw answer (e.g. a <think> block)."""

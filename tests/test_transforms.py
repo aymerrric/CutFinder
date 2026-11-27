@@ -6,7 +6,7 @@ import pytest
 from conftest import brute_force_tsp
 
 from loaders.base import Instance
-from models.transforms import fixed, relaxed, with_cut
+from models.transforms import fixed, relaxed, with_cut, with_stops
 from models.tsp import create_model
 
 TWO_CYCLE: str = "x = m._x\nm.addConstrs(x[i, j] + x[j, i] <= 1 for (i, j) in x.keys() if i < j)"
@@ -90,3 +90,15 @@ def test_cut_violations_measures_each_violated_cut_row() -> None:
     values = {v.VarName: v.X for v in model.getVars()}
     assert read_violations(values) == {"too_strong": pytest.approx(2.0)}
     assert "cut_row_2" in [c.ConstrName for c in model.getConstrs()]  # the unnamed row, numbered
+
+
+def test_with_stops_stops_at_a_good_enough_solution_or_a_high_enough_bound(tsp_instances: List[Instance]) -> None:
+    args = tsp_instances[0]["args"]
+    optimum: float = solve(create_model(**args)).ObjVal
+    found: gp.Model = solve(with_stops(create_model, obj_stop=optimum + 1e-6, bound_stop=optimum + 1e-6, **args))
+    assert found.ObjVal <= optimum + 1e-6 and found.Params.MIPGap == 0
+    # forbid every optimal tour: the bound must pass the optimum, then the solve stops
+    worse: gp.Model = with_stops(create_model, obj_stop=optimum + 1e-6, bound_stop=optimum + 1e-6, **args)
+    worse.addConstr(worse.getObjective() >= optimum + 1)
+    solve(worse)
+    assert worse.Status == gp.GRB.CUTOFF and worse.SolCount == 0  # Cutoff: no worse optimum is proved

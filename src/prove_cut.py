@@ -62,7 +62,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--label", type=str, default=None, help="folder name of the result (default: from the cut)")
     parser.add_argument("--statement_file", type=str, default=None,
                         help="a Lean statement already written (and reviewed): skip the statement phase")
-    parser.add_argument("--llm_backend", type=str, choices=[*BACKENDS, CLAUDE_CODE], default=parameters.LLM_BACKEND,
+    parser.add_argument("--llm_backend", type=str, choices=BACKENDS, default=parameters.LLM_BACKEND,
                         help="claude_code = Claude through the `claude` command (its account, no API key)")
     parser.add_argument("--model_name", type=str, default=parameters.MODEL_NAME,
                         help="for claude_code: an alias (opus, sonnet, fable, haiku) or a full model name")

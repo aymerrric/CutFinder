@@ -57,6 +57,27 @@ def fixed(build: Formulation, solution: Dict[str, float], **args: object) -> gp.
     return m
 
 
+def with_stops(build: Formulation, obj_stop: float, bound_stop: float, **args: object) -> gp.Model:
+    """
+    build(**args) (a minimization) that stops as soon as the answer to "is there a solution of
+    cost <= obj_stop?" is known: a solution that good found (BestObjStop: Gurobi status
+    USER_OBJ_LIMIT) or a bound >= bound_stop proved (BestBdStop). MIPGap = 0 so that Gurobi does
+    not stop at its default 0.01% gap before either one is decided. Cutoff = bound_stop: Gurobi
+    discards every node whose own bound reaches bound_stop, and every solution worse than it, so a
+    cut whose optimum is above bound_stop ends with status CUTOFF without proving that optimum
+    (BestBdStop alone waits for the GLOBAL bound, the smallest over all open nodes, which rises
+    late: learnt_results.md 12.4). Used by the safe check of the evaluator, where both are the
+    known optimum (plus a tolerance).
+    """
+    m: gp.Model = build(**args)
+    m.Params.BestObjStop = obj_stop
+    m.Params.BestBdStop = bound_stop
+    m.Params.Cutoff = bound_stop
+    m.Params.MIPGap = 0.0
+    m.update()
+    return m
+
+
 CUT_ROW_PREFIX: str = "cut_row_"  # name given to the cut's constraints the LLM left unnamed
 RELAX_PREFIXES: tuple = ("ArtP_", "ArtN_")  # Gurobi's feasRelax variables: ArtP_<row>, ArtN_<row>
 

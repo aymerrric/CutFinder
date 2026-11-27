@@ -65,15 +65,16 @@ class SetSpec:
 
 
 def instance_set(problem: Problem, kind: str, level: str = parameters.INSTANCE_LEVEL) -> SetSpec:
-    """The `kind` set ("evaluation" or "test") of `problem` at instance `level` (parameters.INSTANCE_LEVELS).
+    """The `kind` set ("evaluation", "test" or "selection") of `problem` at instance `level` (parameters.INSTANCE_LEVELS).
     The default level keeps the files evaluation.pkl / test.pkl; another level adds its name
     (evaluation_hard.pkl), so the sets of every level live side by side."""
-    if kind not in ("evaluation", "test"):
-        raise ValueError(f"unknown set {kind!r}: 'evaluation' or 'test'")
+    if kind not in ("evaluation", "test", "selection"):
+        raise ValueError(f"unknown set {kind!r}: 'evaluation', 'test' or 'selection'")
     if level not in parameters.INSTANCE_LEVELS:
         raise ValueError(f"unknown instance level {level!r} ({', '.join(parameters.INSTANCE_LEVELS)})")
-    default_file: str = parameters.EVALUATION_FILE if kind == "evaluation" else parameters.TEST_FILE
-    if level == "default":
+    default_file: str = {"evaluation": parameters.EVALUATION_FILE, "test": parameters.TEST_FILE,
+                         "selection": parameters.SELECTION_FILE}[kind]
+    if level == "default":  # the selection set has the test sizes
         sizes: Sizes = problem.evaluation_sizes if kind == "evaluation" else problem.test_sizes
         return SetSpec(default_file, parameters.SET_SEEDS[(kind, level)], sizes)
     if problem.hard_sizes is None:

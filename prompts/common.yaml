@@ -11,9 +11,13 @@
 # written twice ({{ or }}). The texts inserted for {task}, {model_code} and {scoring} are not re-parsed, so
 # they can contain braces freely.
 
-system: |
-  Role: You are a MILP optimization expert working inside a genetic algorithm that evolves
+# {role}: who the LLM is, with {problem} inside (sampling.yaml replaces it when there is no GA).
+role: |-
+  You are a MILP optimization expert working inside a genetic algorithm that evolves
   cutting planes (extra constraints, called cuts) for a MILP model of {problem}, given at the end.
+
+system: |
+  Role: {role}
 
   The problem:
   {description}

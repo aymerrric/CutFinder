@@ -69,6 +69,11 @@ VALIDATION_TIME_LIMIT: float = 600  # seconds: validation instances must reach O
 VALIDITY_DIR: str = os.path.join(DATA_DIR, "validity")  # validity/<problem>/validity.pkl
 VALIDITY_FILE: str = "validity.pkl"
 VALIDITY_TIME_LIMIT: float = 600  # seconds per instance; an instance not solved to optimality is left out
+# seconds per instance for the safe check (evolution/evaluator.py): when a cut removes the stored
+# optimum, the instance is re-solved with the cut until it finds a solution of the optimal cost or
+# proves there is none. Undecided at this limit = refused. The base model's slowest validity
+# instance is JSSP orb01, 122 s on the Mac M4 (learnt_results.md 12.3).
+SAFE_CHECK_TIME_LIMIT: float = 300
 N_EVALUATION: int = 8  # solved under WORK_LIMIT: used to score the cuts
 MIN_BASE_GAP: float = 0.002  # evaluation instances with a smaller base gap are replaced
 #                              (reference GAP_LOWERBOUND = 0.2, in percent)
@@ -93,7 +98,14 @@ INSTANCE_LEVELS: List[str] = ["default", "hard"]
 SET_SEEDS: Dict[Tuple[str, str], int] = {
     ("evaluation", "default"): EVALUATION_SEED, ("test", "default"): TEST_SEED,
     ("evaluation", "hard"): 2000, ("test", "hard"): 3000,
+    ("selection", "default"): 6000, ("selection", "hard"): 7000,
 }
+# Selection set: a second held-out set, built like the test set (same sizes) from other seeds, to
+# choose a run's final cut among its best ones instead of taking the highest run fitness (the GA
+# overfits its evaluation instances: learnt_results.md 12.14). Built by prepare_instances.py
+# --selection; used by select_cuts.py.
+SELECTION_FILE: str = "selection.pkl"
+N_SELECTION: int = 16
 # Optimality sets of the "gap_work" fitness (evolution.evaluator.FitnessMode.GAP_WORK): instances
 # the base model PROVES optimal under WORK_LIMIT, with a work between OPTIMALITY_WORK (enough to
 # measure a change, and room under the limit for a cut that slows the proof down; measured in

@@ -27,6 +27,7 @@ from evolution.individual import SEED, Individual
 from evolution.population import Population
 from evolution.prompts import Prompts
 from evolution.recorder import AttemptRecorder
+from evolution.sampling import Sampler
 from evolution.review import CutReview, format_review, review_cuts
 from evolution.summary import write_summary
 from llm.base import LLMClient
@@ -169,6 +170,8 @@ def run(args: argparse.Namespace, llm: Optional[LLMClient] = None) -> Population
     `llm`: replaces the Ollama client (tests pass a FakeLLM).
     """
     problem: Problem = PROBLEMS[args.problem_name]
+    if getattr(args, "search", "ga") != "ga" and not args.llm_calls:
+        raise ValueError(f"--search {args.search} needs --llm_calls (the LLM call budget)")
     loader: Loader = problem.loader(args.data_dir)
     evaluation_file: str = instance_set(problem, "evaluation", args.instance_level).filename
     for filename in (parameters.VALIDATION_FILE, evaluation_file):
@@ -210,7 +213,8 @@ def run(args: argparse.Namespace, llm: Optional[LLMClient] = None) -> Population
     prompts: Prompts = Prompts(inspect.getsource(problem.base), variant=args.prompt_variant,
                                fitness_mode=args.fitness_mode,  # the LLM is told how it is scored
                                problem=problem.name,  # and what the problem is
-                               instance_level=args.instance_level)  # and the sizes it is scored on
+                               instance_level=args.instance_level,  # and the sizes it is scored on
+                               hide_problem=args.hide_problem)  # or not even which problem it is
 
     run_dir: str = os.path.join(args.runs_dir, args.run_name)  # everything about this run
     os.makedirs(run_dir, exist_ok=True)
@@ -222,14 +226,20 @@ def run(args: argparse.Namespace, llm: Optional[LLMClient] = None) -> Population
     else:
         population = Population(args.population_size)
 
-    ga: GeneticAlgorithm = GeneticAlgorithm(
-        population, llm, prompts, evaluator,
+    options: Dict[str, Any] = dict(
         elitism_ratio=args.elitism_ratio,
         crossover_rate=args.crossover_rate,
         max_llm_attempts=args.max_llm_attempts,
         max_init_attempts=args.max_init_attempts,
         seed=args.seed,
+        claim_of=evaluator.claim_of,
     )
+    ga: GeneticAlgorithm
+    if args.search == "ga":
+        ga = GeneticAlgorithm(population, llm, prompts, evaluator, **options)
+    else:  # no GA: the control (evolution/sampling.py)
+        ga = Sampler(population, llm, prompts, evaluator, mode=args.search, budget=args.llm_calls,
+                     calls_done=calls_spent(os.path.join(run_dir, LLM_DIR), population), **options)
     host, cpu = machine_info()
     status: RunStatus = RunStatus(
         os.path.join(run_dir, STATUS),
@@ -250,14 +260,17 @@ def run(args: argparse.Namespace, llm: Optional[LLMClient] = None) -> Population
         logger.info(summarize(population, time.time() - start))
         fitness: List[float] = [ind.fitness for ind in population.current]
         status.update(generation=population.generation, building=None, child=None,
-                      best=population.best.fitness, mean=statistics.mean(fitness))
+                      best=population.best.fitness, mean=statistics.mean(fitness),
+                      **getattr(llm, "identity", dict)())  # Claude: the exact model id and the effort
         write_summary(run_dir, population)
 
     try:
-        if not population.current:
+        if isinstance(ga, Sampler):
+            ga.run(Individual(idea=problem.baseline_idea, code=problem.baseline_code), generation_done)
+        elif not population.current:
             ga.initialize(Individual(idea=problem.baseline_idea, code=problem.baseline_code))
             generation_done()
-        while population.generation < args.num_generations:
+        while not isinstance(ga, Sampler) and population.generation < args.num_generations:
             ga.generation_step()
             generation_done()
         if args.review_seeds > 0:
@@ -298,11 +311,27 @@ def stop_on_sigterm(signum: int, frame: Any) -> None:
     raise KeyboardInterrupt(f"signal {signum}")
 
 
+def calls_spent(llm_dir: str, population: Population) -> int:
+    """LLM calls of the generations already saved (--search sample | recall, resumed): the
+    attempt records of gen_000 .. gen_<last saved>; a batch cut before it was saved is redone."""
+    if not population.current:
+        return 0
+    return sum(len([f for f in os.listdir(os.path.join(llm_dir, folder)) if f.endswith(".json")])
+               for folder in os.listdir(llm_dir) if os.path.isdir(os.path.join(llm_dir, folder))
+               and folder.startswith("gen_") and int(folder[4:]) <= population.generation) \
+        if os.path.isdir(llm_dir) else 0
+
+
 def make_run_name(args: argparse.Namespace, host: str) -> str:
-    """A resumed run keeps its name (its folder); a new one gets problem, model, host, date."""
+    """A resumed run keeps its name (its folder); a new one gets problem, model, host, date (the
+    model part also names a search without GA and a hidden problem: <model>-sample-hidden)."""
     if args.population_file:
         return run_name_of(args.population_file)
-    model: str = (args.model_name or "none").replace(":", "-").replace("/", "-")
+    model: str = (args.model_name or "none").replace(":", "-").replace("/", "-").replace("_", "-")
+    if args.search != "ga":
+        model += f"-{args.search}"
+    if args.hide_problem:
+        model += "-hidden"
     return f"{args.problem_name}_{model}_{host}_{time.strftime('%Y%m%d_%H%M%S')}"
 
 

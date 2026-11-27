@@ -7,7 +7,7 @@ from utils import parameters
 
 
 def test_backends_are_ollama_and_the_providers() -> None:
-    assert BACKENDS == ["ollama", "groq", "gemini", "openrouter", "muse", "mistral", "requesty"]
+    assert BACKENDS == ["ollama", "groq", "gemini", "openrouter", "muse", "mistral", "requesty", "claude_code"]
 
 
 def test_ollama_backend() -> None:

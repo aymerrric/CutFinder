@@ -76,9 +76,10 @@ def arg_parser(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--llm_backend",
         type=str,
-        choices=["ollama", *parameters.API_PROVIDERS],
+        choices=["ollama", *parameters.API_PROVIDERS, "claude_code"],
         default=parameters.LLM_BACKEND,
-        help="Where the LLM runs: the local Ollama server, or an OpenAI-compatible API (key in llm_keys.env)",
+        help="Where the LLM runs: the local Ollama server, an OpenAI-compatible API (key in llm_keys.env), "
+             "or claude_code: Claude through `claude -p` (the Claude subscription; --model_name sonnet, opus, ...)",
     )
     parser.add_argument(
         "--ollama_host",
@@ -91,6 +92,26 @@ def arg_parser(argv: Optional[List[str]] = None) -> argparse.Namespace:
         type=float,
         default=parameters.WORK_LIMIT,
         help="Gurobi work limit per scoring solve (must match the evaluation set's)",
+    )
+    parser.add_argument(
+        "--search",
+        type=str,
+        choices=["ga", "sample", "recall"],
+        default="ga",
+        help="ga: the genetic algorithm; sample: fresh conversations asking for the best cut (no parent, "
+             "no fitness shown); recall: fresh conversations asking for the best cuts known in the "
+             "literature (evolution/sampling.py). sample and recall need --llm_calls",
+    )
+    parser.add_argument(
+        "--llm_calls",
+        type=int,
+        default=None,
+        help="--search sample | recall: LLM calls in all (e.g. the number of calls of the GA run compared)",
+    )
+    parser.add_argument(
+        "--hide_problem",
+        action="store_true",
+        help="Do not tell the LLM which problem it is (prompts/anonymous/<problem>.yaml)",
     )
     parser.add_argument(
         "--prompt_variant",

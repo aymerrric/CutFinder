@@ -6,7 +6,7 @@ from typing import List, Tuple
 
 import pytest
 
-from evolution.evaluator import BASE_LP_EVAL, BASE_SEED, CutEvaluator, FitnessMode
+from evolution.evaluator import BASE_LP_EVAL, BASE_SEED, KEEPS_OPTIMA, SAFE, CutEvaluator, FitnessMode
 from evolution.genetic import CutRejected
 from loaders.base import Instance
 from loaders.sets import BASE, BASE_LP, build_set
@@ -55,14 +55,50 @@ def used_arc(inst: Instance) -> Tuple[int, int]:
 
 
 def test_valid_useful_cut_gets_a_fitness(sets: Tuple[List[Instance], List[Instance]]) -> None:
-    fitness: float = make_evaluator(sets)(TWO_CYCLE)
+    evaluator: CutEvaluator = make_evaluator(sets)
+    fitness: float = evaluator(TWO_CYCLE)
     assert math.isfinite(fitness) and fitness > 0
+    assert evaluator.claim_of(TWO_CYCLE) == KEEPS_OPTIMA  # it keeps every stored optimal tour
+    assert evaluator.claim_of("m.update()") is None  # never accepted
 
 
 def test_cut_removing_an_optimal_tour_is_invalid(sets: Tuple[List[Instance], List[Instance]]) -> None:
     i, j = used_arc(sets[0][0])
-    with pytest.raises(CutRejected, match="removes the optimal solution"):
-        make_evaluator(sets)(f"m.addConstr(m._x[{i}, {j}] == 0)\n" + TWO_CYCLE)
+    # both directions: the costs are symmetric, so banning one direction keeps the reversed tour
+    code: str = f"m.addConstr(m._x[{i}, {j}] + m._x[{j}, {i}] == 0)\n" + TWO_CYCLE
+    evaluator: CutEvaluator = make_evaluator(sets)
+    with pytest.raises(CutRejected, match="removes the optimal solution .* no other solution of that cost is left"):
+        evaluator(code)
+    assert evaluator.claim_of(code) is None
+
+
+def direction_breaking_cut(inst: Instance) -> str:
+    """A symmetry-breaking cut (safe, not valid) that the stored optimal tour of `inst` violates:
+    the city after the depot has a smaller (or larger) index than the city before it, whichever
+    the stored tour does not do. The reversed tour satisfies it, at the same cost."""
+    used = {k for k, v in inst[BASE].solution.items() if k.startswith("x[1,") and v > 0.5}
+    after: int = int(next(iter(used))[4:-1])  # "x[1,5]" -> 5
+    before: int = next(int(k[2:].split(",")[0]) for k, v in inst[BASE].solution.items()
+                       if k.startswith("x[") and k.endswith(",1]") and v > 0.5)
+    sign: str = ">=" if after < before else "<="  # the opposite of the stored tour
+    return (TWO_CYCLE + "\nm.addConstr(gp.quicksum(j * m._x[1, j] for j in range(2, n + 1)) "
+            f"{sign} gp.quicksum(i * m._x[i, 1] for i in range(2, n + 1)))")
+
+
+def test_symmetry_breaking_cut_is_accepted_as_safe(sets: Tuple[List[Instance], List[Instance]]) -> None:
+    code: str = direction_breaking_cut(sets[0][0])
+    evaluator: CutEvaluator = make_evaluator(sets)
+    # EvoCut's check alone (fixed to the stored tour) refuses it
+    fitness: float = evaluator(code)
+    assert math.isfinite(fitness) and evaluator.claim_of(code) == SAFE
+
+
+def test_undecided_safe_check_is_refused(sets: Tuple[List[Instance], List[Instance]]) -> None:
+    evaluator: CutEvaluator = make_evaluator(sets)
+    evaluator.safe_solver.time_limit = 0  # stops before deciding anything
+    with pytest.raises(CutRejected, match="no other solution of that cost was found in 0 s") as rejected:
+        evaluator(direction_breaking_cut(sets[0][0]))
+    assert rejected.value.invalid
 
 
 def test_implied_constraint_is_useless(sets: Tuple[List[Instance], List[Instance]]) -> None:
@@ -95,7 +131,7 @@ def test_validity_instances_are_checked_and_quoted(sets: Tuple[List[Instance], L
     only: str = sorted(arcs(tight) - arcs(sets[0][0]))[0]  # in the tight instance's optimal tour only
     i, j = (int(t) for t in only[2:-1].split(","))
     with pytest.raises(CutRejected, match=r"tight_one \(a tight test instance\)") as rejected:
-        evaluator(f"m.addConstr(m._x[{i}, {j}] == 0, name='ban')\n" + TWO_CYCLE)
+        evaluator(f"m.addConstr(m._x[{i}, {j}] + m._x[{j}, {i}] == 0, name='ban')\n" + TWO_CYCLE)
     assert rejected.value.invalid
     message: str = str(rejected.value)
     assert "these constraints of your cut are violated: ban (by 1)" in message  # the faulty line
@@ -233,7 +269,7 @@ def test_unnamed_cut_rows_are_numbered_and_big_data_is_not_shown(sets: Tuple[Lis
     i, j = used_arc(inst)
     with pytest.raises(CutRejected, match=r"cut_row_2 \(by 1\)"):  # its 2nd constraint, left unnamed
         evaluator._check_validity("t", functools.partial(
-            with_cut, base=create_model, code=f"m.addConstr(m._x.sum() >= 0)\nm.addConstr(m._x[{i}, {j}] == 0)"))
+            with_cut, base=create_model, code=f"m.addConstr(m._x.sum() >= 0)\nm.addConstr(m._x[{i}, {j}] + m._x[{j}, {i}] == 0)"))
     assert data_size(inst["args"]) == 1 + 7 * 6  # n, and the 42 costs
     assert describe_data(inst, max_numbers=10) == ""
 
@@ -293,3 +329,15 @@ def test_a_cut_above_the_optimum_of_an_optimality_instance_is_invalid(
     with pytest.raises(CutRejected, match="invalid cut"):
         make_work_evaluator(sets, optimality).evaluate(code)
     make_evaluator(sets).evaluate(code)  # the gap mode never solves that instance: accepted there
+
+
+def test_a_base_solve_stopped_by_the_time_limit_is_solved_again() -> None:
+    """17 Nov: a loaded machine stopped the base model at the time limit and the run died."""
+    from types import SimpleNamespace
+    from evolution import evaluator as ev
+    statuses = ["TIME_LIMIT", "WORK_LIMIT"]
+    solver = SimpleNamespace(seed=44, solve=lambda inst, name: SimpleNamespace(status=statuses.pop(0)))
+    assert ev.CutEvaluator._solve_base(solver, {"name": "i"}).status == "WORK_LIMIT"
+    statuses[:] = ["TIME_LIMIT"] * (ev.BASE_RETRIES + 1)
+    assert ev.CutEvaluator._solve_base(solver, {"name": "i"}).status == "TIME_LIMIT"  # gives up, the caller raises
+    assert statuses == []
